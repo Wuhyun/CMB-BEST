@@ -135,6 +135,7 @@ class Basis:
 
         # 3D mode indices
         self.mode_indices, self.mode_symmetry_factor = self.create_mode_indices()
+        #self.use_precomputed_QQ = kwargs.get("use_precomputed_QQ", False)
 
         if self.use_tetraquad:
             # Directly evaluate 3D basis functions on 3D tetrapyd grid
@@ -145,12 +146,18 @@ class Basis:
             self.mode_bispectra_covariance = np.matmul(self.tetrapyd_grid_weights[np.newaxis,:] * self.mode_bispectra_evaluations, self.mode_bispectra_evaluations.T)
             self.mode_bispectra_norms = np.sqrt(np.diag(self.mode_bispectra_covariance))
             print("3D mode bispectra and covariance evaluated")
-        
+         
         else:
             # Do not evaluate 3D basis functions on the 3D grid directly
             # as this can often be too large to store in memory
             self.mode_bispectra_evaluations = None
-            self.mode_bispectra_covariance = self.compute_mode_bispectra_covariance_C()
+            self.precomputed_QQ_path = kwargs.get("precomputed_QQ_path", None)
+
+            if self.precomputed_QQ_path is not None:
+                print("Loading precomputed bispectra covariance from", self.precomputed_QQ_path)
+                self.mode_bispectra_covariance = np.load(self.precomputed_QQ_path)
+            else:
+                self.mode_bispectra_covariance = self.compute_mode_bispectra_covariance_C()
             self.mode_bispectra_norms = np.sqrt(np.diag(self.mode_bispectra_covariance))
             #self.mode_bispectra_covariance = self.compute_mode_bispectra_covariance_cython()
             #self.mode_bispectra_covariance = self.old_compute_mode_bispectra_covariance()
@@ -506,6 +513,8 @@ class Basis:
         print("start!")
         print(n_modes, mode_p_max, k_npts, tetra_npts)
 
+        print(self.mode_function_evaluations[-1,i1])
+
         # Call the wrapped C function
         compute_mode_bispectra_covariance(&mode_bispectra_covariance_view[0,0],
                         &tetra_weights[0], <int *> &tetra_i1[0], <int *> &tetra_i2[0], <int *> &tetra_i3[0], tetra_npts,
@@ -639,7 +648,7 @@ class Basis:
 
         # Use conjugate gradient algorithm to solve (alpha @ QQ = QS)
         # 'alpha' is a matrix of size (N_models, N_modes)
-        #norms = np.ones_like(norms) #TEST!!
+        norms = np.ones_like(norms) #TEST!!
         #norms = np.diag(self.gamma) ** (+0.5) #TEST!!
         QQ_tilde = QQ / norms[:,np.newaxis] / norms[np.newaxis,:]     # Normalise modes
         alpha = np.zeros((N_models, N_modes))

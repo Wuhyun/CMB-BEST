@@ -165,25 +165,25 @@ void compute_mode_bispectra_covariance(double *mode_bispectra_covariance,
 
 				double sum = 0.0;
 				for (int t = 0; t < tetra_npts; t++) {
-					int i1 = tetra_i1[t];
-					int i2 = tetra_i2[t];
-					int i3 = tetra_i3[t];
+					int j1 = tetra_i1[t];
+					int j2 = tetra_i2[t];
+					int j3 = tetra_i3[t];
 
-					double mode_11 = mode_evals[q1 * N_K + i1];
-					double mode_12 = mode_evals[q1 * N_K + i2];
-					double mode_13 = mode_evals[q1 * N_K + i3];
+					double q_11 = mode_evals[q1 * N_K + j1];
+					double q_12 = mode_evals[q1 * N_K + j2];
+					double q_13 = mode_evals[q1 * N_K + j3];
 
-					double mode_21 = mode_evals[q2 * N_K + i1];
-					double mode_22 = mode_evals[q2 * N_K + i2];
-					double mode_23 = mode_evals[q2 * N_K + i3];
+					double q_21 = mode_evals[q2 * N_K + j1];
+					double q_22 = mode_evals[q2 * N_K + j2];
+					double q_23 = mode_evals[q2 * N_K + j3];
 
-					double mode_31 = mode_evals[q3 * N_K + i1];
-					double mode_32 = mode_evals[q3 * N_K + i2];
-					double mode_33 = mode_evals[p3 * N_K + i3];
+					double q_31 = mode_evals[q3 * N_K + j1];
+					double q_32 = mode_evals[q3 * N_K + j2];
+					double q_33 = mode_evals[q3 * N_K + j3];
 
-					double Q2_eval = (mode_11 * mode_22 * mode_33 + mode_11 * mode_23 * mode_32 
-									+ mode_12 * mode_21 * mode_33 + mode_12 * mode_23 * mode_31
-									+ mode_13 * mode_21 * mode_32 + mode_13 * mode_22 * mode_31) / 6.0;
+					double Q2_eval = (q_11 * q_22 * q_33 + q_11 * q_23 * q_32 
+									+ q_12 * q_21 * q_33 + q_12 * q_23 * q_31
+									+ q_13 * q_21 * q_32 + q_13 * q_22 * q_31) / 6.0;
 					
 					sum += Q2_eval * Q_vec[t];
 				}
@@ -193,6 +193,13 @@ void compute_mode_bispectra_covariance(double *mode_bispectra_covariance,
 		}
 
 		free_array(Q_vec);
+	}
+
+	for (int n = 0; n < 10; n++) {
+		for (int m = 0; m < 10; m++) {
+			printf("%.10e ", mode_bispectra_covariance[n * N_MODES + m]);
+		}
+		printf("\n");
 	}
 
 	return;
