@@ -54,6 +54,30 @@ cdef extern from "tetrapyd.h":
                     double *mode_evals, int mode_p_max, int k_npts)
 
 
+def inverse_cholesky_WS(M):
+    ''' Compute cholesky decomposition of the inverse of symmetric, positive-definite matrix M
+    using a Modified Gram-Schmidt process.
+    Returns a lower triangular matrix L such that C^{-1} = L^T L
+    '''
+
+    num = M.shape[0]
+    C = np.zeros((num, num))
+    N = np.zeros(num)
+    C[0,0] = 1
+    N[0] = M[0,0] ** (-0.5)
+
+    for n in range(num):
+        v = N[:n] ** 2 * np.matmul(C[:n,:n], M[n,:n])
+        C[n,:n] = -np.matmul(v[:], C[:n,:n])
+        C[n,n] = 1
+
+        #N[n] = np.dot(M[n,:n+1], C[n,:n+1]) ** (-0.5)      # Faster but less accurate
+        N[n] = np.dot(C[n,:n+1], np.matmul(M[:n+1,:n+1], C[n,:n+1])) ** (-0.5)      # Slower but more accurate
+
+    L = C[:,:] * N[:,np.newaxis]
+
+    return L
+
 
 class Basis:
     ''' Class for CMBBEST's modal basis '''
@@ -119,10 +143,17 @@ class Basis:
 
         else:
             self.k_grid, self.k_weights = self.create_k_grid()
-            self.tetrapyd_indices, self.tetrapyd_grid = self.create_tetrapyd_grid()
-            self.tetrapyd_grid_size = self.tetrapyd_grid.shape[1]
-            self.tetrapyd_grid_weights = self.compute_tetrapyd_grid_weights()
-            print("Tetrapyd weights computed")
+
+            precomputed_weights_path = kwargs.get("precomputed_weights_path", None)
+            if precomputed_weights_path is None:
+                self.tetrapyd_indices, self.tetrapyd_grid = self.create_tetrapyd_grid()
+                self.tetrapyd_grid_size = self.tetrapyd_grid.shape[1]
+                self.tetrapyd_grid_weights = self.compute_tetrapyd_grid_weights()
+                print("Tetrapyd weights computed")
+            else:
+                print("Loading precomputed tetrapyd weights from", precomputed_weights_path)
+                self.tetrapyd_indices, self.tetrapyd_grid, self.tetrapyd_grid_weights = self.load_tetraquad(precomputed_weights_path)
+                self.tetrapyd_grid_size = self.tetrapyd_grid.shape[1]
         
 
         # Evaluate mode functions on 1D k grid
@@ -616,6 +647,67 @@ class Basis:
         return mode_bispectra_covariance 
     
 
+    def compute_analytical_mode_bispectra_covariance(self):
+        # Analytically compute the mode bispectra using Tetraquad module
+
+        import tetraquad_230224 as tetraquad
+
+        k_min, k_max = self.mode_k_min, self.mode_k_max
+        alpha = k_min / k_max
+        p_max = self.mode_p_max
+        negative_power = self.parameter_n_scalar - 2
+
+        ps, qs, rs = tetraquad.poly_triplets_individual_degree(p_max-1, negative_power=negative_power)
+        # Assumed that the ordering here is identical to mode_indices except the negative powers
+        #assert(np.allclose(ps[1:], self.mode_indices[0,1:]))
+        print("TEST 1=", ps)
+        print("TEST 2=", self.mode_indices[0,:])
+
+        # Bispectrum covariance of k1^p k2^q k3^r symmetrised over (p,q,r) over Tetrapyd(alpha,1)
+        poly_cov = tetraquad.analytic_poly_cross_product_alpha_ns(ps, qs, rs, alpha, negative_power=negative_power)
+
+        # Bispectrum covariance of k1^p k2^q k3^r symmetrised over (p,q,r) over Tetrapyd(k_min, k_max)
+        rescale_factor = k_max ** (ps + qs + rs)
+        volume_factor = k_max ** 3
+        poly_cov = poly_cov[:,:] * rescale_factor[np.newaxis,:] * rescale_factor[:,np.newaxis] * volume_factor
+
+        # Now, we need to find transformation matrix which converts polynomials into our legendre basis
+        trans_matrix_1d = np.zeros((p_max, p_max))
+        trans_matrix_1d[0,0] = k_min    # The first mode is k_min * k^(n_s-2)
+        kbar_of_k = np.polynomial.Polynomial([(k_max+k_min)/2, 2/(k_max-k_min)])
+        for p in range(1, p_max):
+            leg_of_kbar = np.polynomial.Legendre([0]*(p-1) + [1])
+            leg_of_k = leg_of_kbar(kbar_of_k)
+            coef = leg_of_kbar.coef
+            trans_matrix_1d[p,1:1+len(coef)] = coef[:]
+        
+        # Additional corrections for orthogonal coefficients and mode nomalisations
+        additional_trans = np.identity(p_max)
+        if self.orthogonalisation_coefficients is not None:
+            additional_trans[0,1:] = -self.orthogonalisation_coefficients[:]
+        if self.mode_normalisations is not None:
+            additional_trans /= self.mode_normalisations[:,np.newaxis]
+        trans_matrix_1d = np.matmul(additional_trans, trans_matrix_1d)
+
+        # Form the 3D transformation matrix
+        # R_{p1 p2 p3, p1' p2' p3'} = T_{p1 p1'} T_{p2 p2'} T_{p3 p3'}
+        # Note that the symmetry factor on (p1',p2',p3') appears while summing over 0 <= p1', p2', p3' < p_max
+        n_modes = ps.shape[0]
+        trans_matrix_3d = np.zeros((n_modes, n_modes))
+        p1, p2, p3 = self.mode_indices
+        for t in range(n_modes):
+            T1, T2, T3 = trans_matrix_1d[[p1[t],p2[t],p3[t]],:]
+            trans_matrix_3d[t,:] = ((T1[p1] * T2[p2] * T3[p3] + T1[p1] * T2[p3] * T3[p2]
+                                   + T1[p2] * T2[p1] * T3[p3] + T1[p2] * T2[p3] * T3[p1]
+                                   + T1[p3] * T2[p1] * T3[p2] + T1[p3] * T2[p2] * T3[p1])
+                                   * (self.mode_symmetry_factor[:] / 6.0))
+        
+        # Finally, the desired bispectrum covariance of Q over Tetrapyd(k_min, k_max)
+        analytic_cov = np.matmul(np.matmul(trans_matrix_3d, poly_cov), trans_matrix_3d.T)
+
+        return analytic_cov
+    
+
     def modal_decomposition(self, model_list, check_convergence=True):
         # Decompose given model shape functions with respect to modal basis
 
@@ -648,17 +740,26 @@ class Basis:
 
         # Use conjugate gradient algorithm to solve (alpha @ QQ = QS)
         # 'alpha' is a matrix of size (N_models, N_modes)
-        norms = np.ones_like(norms) #TEST!!
+        #norms = np.ones_like(norms) #TEST!!
         #norms = np.diag(self.gamma) ** (+0.5) #TEST!!
+        '''
         QQ_tilde = QQ / norms[:,np.newaxis] / norms[np.newaxis,:]     # Normalise modes
         alpha = np.zeros((N_models, N_modes))
         for model_no in range(N_models):
             QS_tilde = QS[model_no,:] / norms   # Normalise mode
-            alpha_tilde, exit_code = conjugate_gradient(QQ_tilde, QS_tilde, tol=1e-12, atol=0)
+            alpha_tilde, exit_code = conjugate_gradient(QQ_tilde, QS_tilde, tol=1e-8, atol=0)
             print("Shape #{}/{} decomposed using CG with exit code {}".format(model_no+1, N_models, exit_code))
             #alpha_tilde = np.matmul(np.linalg.inv(QQ_tilde), QS_tilde)
             #print("Shape #{}/{} decomposed using direct inverse".format(model_no+1, N_models))
             alpha[model_no,:] = alpha_tilde / norms          # Reintroduce normalisation factor
+        '''
+        QQ_tilde = QQ / norms[:,np.newaxis] / norms[np.newaxis,:]     # Normalise modes
+        QS_tilde = QS[:,:] / norms[np.newaxis,:]   # Normalise mode
+        #L_tilde = inverse_cholesky_WS(QQ_tilde)
+        #alpha_tilde = np.matmul(np.matmul(QS_tilde, L_tilde.T), L_tilde)
+        alpha_tilde = np.matmul(QS_tilde, np.linalg.inv(QQ_tilde))
+        alpha = alpha_tilde / norms[np.newaxis,:]
+        alpha[:,0] = 0.
          
         '''
         # Convert alphas with p1>=p2>=p3 and size (p_max+2)*(p_max+1)*p_max/6
