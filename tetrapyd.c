@@ -195,12 +195,14 @@ void compute_mode_bispectra_covariance(double *mode_bispectra_covariance,
 		free_array(Q_vec);
 	}
 
+	/*
 	for (int n = 0; n < 10; n++) {
 		for (int m = 0; m < 10; m++) {
 			printf("%.10e ", mode_bispectra_covariance[n * N_MODES + m]);
 		}
 		printf("\n");
 	}
+	*/
 
 	return;
 }
@@ -276,14 +278,22 @@ void compute_QS(double *QS, double *S, int n_shapes,
 
 	return;
 
-
-
-
-
-
-
-
 }
+
+#if 0
+void inverse_cholesky_WS(double *result, double *M, int n) {
+    /* Compute cholesky decomposition of the inverse of symmetric, positive-definite matrix M
+    using a Modified Gram-Schmidt process.
+    Computes a lower triangular matrix L such that C^{-1} = L^T L
+	*/
+
+	const int N = n;
+
+	for (int i = 0; i < n; i++) {
+
+	}
+}
+#endif
 
 #if 0
 
