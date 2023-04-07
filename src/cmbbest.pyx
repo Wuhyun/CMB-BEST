@@ -1,9 +1,11 @@
 import numpy as np
+import os
 cimport numpy as np
 cimport cython
 from cython.parallel import parallel, prange
 from libc.stdlib cimport malloc, free
 from scipy.special import legendre
+from scipy.interpolate import RegularGridInterpolator
 from numpy.random import default_rng
 from scipy.sparse.linalg import cg as conjugate_gradient
 import pandas as pd
@@ -17,7 +19,11 @@ BASE_N_SCALAR = 0.9649
 J_DELTA_PHI = 1.5714e-8
 J_N_SCALAR = 0.9648
 
-CMBBEST_DATA_FILE_PATH = "./data/cmbbest_data.hdf5"
+CURRENT_PATH = os.path.dirname(os.path.realpath(__file__)) 
+CMBBEST_DATA_FILE_PATH =  os.path.join(CURRENT_PATH, "data/cmbbest_data.hdf5")
+
+def set_data_path(path):
+    CMBBEST_DATA_FILE_PATH = path
 
 
 # For numpy PyArray_* API in Cython
@@ -29,17 +35,6 @@ def GET_SIGNED_NUMPY_INT_TYPE():
     return np.asarray(<int[:1]>(&tmp)).dtype
 # If the below fails, there might be problems using int arrays in Cython
 assert GET_SIGNED_NUMPY_INT_TYPE() == np.dtype("i")
-
-
-cdef extern from "gl_integration.h":
-    int asy(double *nodes, double *weights, unsigned long int n)
-
-def gauss_legendre_quadrature(int N):
-    assert N > 0
-    cdef double[:] gl_nodes = np.zeros(N, dtype=np.dtype("d"))
-    cdef double[:] gl_weights = np.zeros(N, dtype=np.dtype("d"))
-    asy(&gl_nodes[0], &gl_weights[0], N)
-    return gl_nodes, gl_weights
 
 
 cdef extern from "tetrapyd.h":
@@ -92,45 +87,47 @@ def tensor_prod_coeffs(coeffs_1, coeffs_2, pmax_1, pmax_2):
 
 
 class Basis:
-    ''' Class for CMBBEST's modal basis '''
+    ''' Class for CMBBEST's basis set'''
 
-    def __init__(self, basis_type, mode_p_max, polarisation_on=True, use_precomputed_QQ=True, **kwargs):
+    def __init__(self, basis_type="Legendre", mode_p_max=10, polarization_on=True, **kwargs):
         self.basis_type = basis_type
         self.mode_p_max = mode_p_max
-        self.polarisation_on = polarisation_on
+        self.polarization_on = polarization_on
 
-        if basis_type == "Monomial" and mode_p_max == 4 and not polarisation_on:
+        if basis_type == "Monomial" and not polarization_on:
+            mode_p_max = 4 
             self.data_path = "/trio/T"
 
-        elif basis_type == "Monomial" and mode_p_max == 4 and polarisation_on:
+        elif basis_type == "Monomial" and polarization_on:
+            mode_p_max = 4 
             self.data_path = "/trio/TP"
-            #self.data_path = "/trio/TPJ"
 
-        elif basis_type == "Legendre" and mode_p_max == 10 and not polarisation_on:
+        elif basis_type == "Legendre" and mode_p_max == 10 and not polarization_on:
             self.data_path = "legendre/base/T"
 
-        elif basis_type == "Legendre" and mode_p_max == 10 and polarisation_on:
+        elif basis_type == "Legendre" and mode_p_max == 10 and polarization_on:
             self.data_path = "legendre/base/TP"
 
-        elif basis_type == "Legendre" and mode_p_max == 30 and polarisation_on:
+        elif basis_type == "Legendre" and mode_p_max == 30 and polarization_on:
             self.data_path = "legendre/hires/TP"
 
-        elif basis_type == "Legendre2015" and mode_p_max == 30 and not polarisation_on:
+        elif basis_type == "Legendre2015" and mode_p_max == 30 and not polarization_on:
             self.data_path = "legendre/hires_2015/T"
 
-        elif basis_type == "Legendre2015" and mode_p_max == 30 and polarisation_on:
+        elif basis_type == "Legendre2015" and mode_p_max == 30 and polarization_on:
             self.data_path = "legendre/hires_2015/TP"
 
-        elif basis_type == "SineLegendre1000" and mode_p_max == 10 and polarisation_on:
+        elif basis_type == "SineLegendre1000" and mode_p_max == 10 and polarization_on:
             self.data_path = "legendre/sinleg/TP"
 
         else:
-            print("Basis type '{}' with p_max={} and polarisation_on={} is currently not supported".format(basis_type, mode_p_max, polarisation_on)) 
+            print("Basis type '{}' with p_max={} and polarization_on={} is currently not supported".format(basis_type, mode_p_max, polarization_on)) 
 
 
         # Load gamma and beta data from files
+        use_precomputed_QQ = kwargs.get("use_precomputed_QQ", True)
         self.load_data(use_precomputed_QQ=use_precomputed_QQ)
-        print("Gamma and beta data loaded")
+        #print("Gamma and beta data loaded")
 
         if not use_precomputed_QQ:
             # When not using the precomputed bispectra covariance (QQ),
@@ -144,16 +141,15 @@ class Basis:
                 self.tetrapyd_indices, self.tetrapyd_grid = self.create_tetrapyd_grid()
                 self.tetrapyd_grid_size = self.tetrapyd_grid.shape[1]
                 self.tetrapyd_grid_weights = self.compute_tetrapyd_grid_weights()
-                print("Tetrapyd weights computed")
+                #print("Tetrapyd weights computed")
             else:
-                print("Loading precomputed tetrapyd weights from", precomputed_weights_path)
+                #print("Loading precomputed tetrapyd weights from", precomputed_weights_path)
                 self.tetrapyd_indices, self.tetrapyd_grid, self.tetrapyd_grid_weights = self.load_tetraquad(precomputed_weights_path)
                 self.tetrapyd_grid_size = self.tetrapyd_grid.shape[1]
         
-
         # Evaluate mode functions on 1D k grid
         self.mode_function_evaluations = self.mode_functions(self.k_grid)
-        print("1D mode functions evaluated")
+        #print("1D mode functions evaluated")
 
         # 3D mode indices
         self.mode_indices, self.mode_symmetry_factor = self.create_mode_indices()
@@ -170,13 +166,13 @@ class Basis:
             self.precomputed_QQ_path = kwargs.get("precomputed_QQ_path", None)
 
             if self.precomputed_QQ_path is not None:
-                print("Loading precomputed bispectra covariance from", self.precomputed_QQ_path)
+                #print("Loading precomputed bispectra covariance from", self.precomputed_QQ_path)
                 self.mode_bispectra_covariance = np.load(self.precomputed_QQ_path)
             else:
                 self.mode_bispectra_covariance = self.compute_mode_bispectra_covariance_C()
             self.mode_bispectra_norms = np.sqrt(np.diag(self.mode_bispectra_covariance))
 
-        print("{} Basis is now ready".format(self.basis_type))
+        #print("{} Basis is now ready".format(self.basis_type))
 
 
     def load_data(self, use_precomputed_QQ=True):
@@ -201,14 +197,14 @@ class Basis:
             if dg.attrs["mode_orthogonalised"]:
                 self.orthogonalisation_coefficients = np.array(dg["orthogonalisation_coefficients"])
                 #print("Using orthog. coefficients", self.orthogonalisation_coefficients)
-                print("Using mode orthogonalisation coefficients")
+                #print("Using mode orthogonalisation coefficients")
             else:
                 self.orthogonalisation_coefficients = None
 
             if dg.attrs["mode_normalised"]:
                 self.mode_normalisations = np.array(dg["mode_normalisations"])
                 #print("Using normalisation", self.mode_normalisations)
-                print("Using mode normalisation")
+                #print("Using mode normalisation")
             else:
                 self.mode_normalisations = None
             
@@ -319,13 +315,8 @@ class Basis:
     
 
     def create_k_grid(self, grid_type="uniform"):
-        if grid_type == "GL":
-            gl_nodes, gl_weights = gauss_legendre_quadrature(self.k_grid_size)
-            rescale = (self.mode_k_max - self.mode_k_min) / 2
-            k_grid = rescale * (gl_nodes + 1) + self.mode_k_min
-            k_weights = rescale * gl_weights
 
-        elif grid_type == "uniform":
+        if grid_type == "uniform":
             # Create a uniform one-dimensional k grid 
             k_grid = np.linspace(self.mode_k_min, self.mode_k_max, self.k_grid_size)
             k_weights = np.ones_like(k_grid) * (self.mode_k_max - self.mode_k_min) / (self.k_grid_size - 1)
@@ -526,8 +517,8 @@ class Basis:
         mode_bispectra_covariance = np.zeros((n_modes, n_modes), dtype=np.dtype("d"))
         cdef double [:,::1] mode_bispectra_covariance_view = mode_bispectra_covariance
 
-        print("start!")
-        print(n_modes, mode_p_max, k_npts, tetra_npts)
+        #print("start!")
+        #print(n_modes, mode_p_max, k_npts, tetra_npts)
 
         #print(self.mode_function_evaluations[-1,i1])
 
@@ -540,8 +531,8 @@ class Basis:
         return mode_bispectra_covariance 
     
 
-    def modal_decomposition(self, model_list, check_convergence=True):
-        # Decompose given model shape functions with respect to modal basis
+    def basis_expansion(self, model_list, check_convergence=True):
+        # Expand given model shape functions with respect to separable basis
 
         N_models = len(model_list)
         N_modes = self.mode_indices.shape[1]
@@ -559,7 +550,6 @@ class Basis:
         # S is assumed to be symmetric under permutations of k1, k2, k3
         S = np.stack([model.shape_function(k1, k2 ,k3) for model in model_list])
         shape_covariance = np.matmul(S * w[np.newaxis,:], S.T)
-        print("S has shape", S.shape)
 
         # Find the inner product between shapes and mode bispectra
         # 'QS' is a matrix of size (N_models, N_modes)
@@ -578,24 +568,12 @@ class Basis:
         for model_no in range(N_models):
             QS_tilde = QS[model_no,:] / norms   # Normalise mode
             alpha_tilde, exit_code = conjugate_gradient(QQ_tilde, QS_tilde, tol=1e-8, atol=0, maxiter=min([10*N_modes, 10000]))
-            print("Shape #{}/{} decomposed using CG with exit code {}".format(model_no+1, N_models, exit_code))
-            #alpha_tilde = np.matmul(np.linalg.inv(QQ_tilde), QS_tilde)
-            #print("Shape #{}/{} decomposed using direct inverse".format(model_no+1, N_models))
+            #print("Shape #{}/{} expanded using CG with exit code {}".format(model_no+1, N_models, exit_code))
+            print("Shape #{}/{} expanded".format(model_no+1, N_models))
             alpha[model_no,:] = alpha_tilde / norms          # Reintroduce normalisation factor
 
-        '''
-        # Direct inversion using inverse Cholesky
-        QQ_tilde = QQ / norms[:,np.newaxis] / norms[np.newaxis,:]     # Normalise modes
-        QS_tilde = QS[:,:] / norms[np.newaxis,:]   # Normalise mode
-        #L_tilde = inverse_cholesky_WS(QQ_tilde)
-        #alpha_tilde = np.matmul(np.matmul(QS_tilde, L_tilde.T), L_tilde)
-        alpha_tilde = np.matmul(QS_tilde, np.linalg.inv(QQ_tilde))
-        alpha = alpha_tilde / norms[np.newaxis,:]
-        alpha[:,0] = 0.
-        '''
-         
-        decomposition_coefficients = alpha
-        print("Decomposition complete.")
+        expansion_coefficients = alpha
+        print("Expansion complete.")
 
         if check_convergence:
             # Optional check on convergence of the mode expansion
@@ -608,9 +586,9 @@ class Basis:
             # convergence_epsilon = np.sqrt(2 - 2 * convergence_correlation)
             convergence_MSE = np.abs(sum_SS + sum_RR - 2 * sum_SR) / sum_SS
 
-            return decomposition_coefficients, shape_covariance, convergence_correlation, convergence_MSE
+            return expansion_coefficients, shape_covariance, convergence_correlation, convergence_MSE
         else:
-            return decomposition_coefficients, shape_covariance
+            return expansion_coefficients, shape_covariance
 
 
     @cython.boundscheck(False) # turn off bounds-checking for entire function
@@ -619,7 +597,7 @@ class Basis:
         # Evaluate the inner product('QS') between mode bispectra and shape functions
         # (QS)_{in} := <S_i, Q_n}
 
-        print("QS Function start!", flush=True)
+        #print("QS Function start!", flush=True)
 
         i1, i2, i3 = self.tetrapyd_indices
         p1, p2, p3 = self.mode_indices
@@ -633,14 +611,14 @@ class Basis:
 
         cdef int tetra_npts = self.tetrapyd_grid_size
 
-        print("mode evals declared", flush=True)
+        #print("mode evals declared", flush=True)
 
         cdef int [::1] mode_p1 = p1.astype("i")
         cdef int [::1] mode_p2 = p2.astype("i")
         cdef int [::1] mode_p3 = p3.astype("i")
         cdef int n_modes = self.mode_indices.shape[1]
 
-        print("mode p1,2,3s declared", flush=True)
+        #print("mode p1,2,3s declared", flush=True)
 
         cdef double [:,:] S_view = S
         cdef int n_shapes = S.shape[0]
@@ -653,7 +631,7 @@ class Basis:
         cdef int n_p1, n_p2, n_p3
         cdef Py_ssize_t n, k, i
 
-        print("Loop starts", flush=True)
+        #print("Loop starts", flush=True)
 
         with nogil, parallel():
 
@@ -687,7 +665,7 @@ class Basis:
         # Evaluate the inner product('QS') between mode bispectra and shape functions
         # (QS)_{in} := <S_i, Q_n}
 
-        print("QS Function start!", flush=True)
+        #print("QS Function start!", flush=True)
 
         i1, i2, i3 = self.tetrapyd_indices
         p1, p2, p3 = self.mode_indices
@@ -717,8 +695,8 @@ class Basis:
         cdef double [::1] QS_view = QS
         S = S.flatten()
 
-        print("QS start!")
-        print(n_modes, mode_p_max, k_npts, tetra_npts, n_shapes)
+        #print("QS start!")
+        #print(n_modes, mode_p_max, k_npts, tetra_npts, n_shapes)
 
         # Call the wrapped C function
 
@@ -728,24 +706,25 @@ class Basis:
                     &mode_evals[0,0], mode_p_max, k_npts)
 
         QS = QS.reshape((n_shapes, n_modes))
-        print("done!")
+        #print("done!")
 
         return QS
 
 
 
-    def constrain_models(self, model_list, decomposition_coefficients=None, convergence_correlation=None, convergence_MSE=None, full_result=False, return_fisher=False):
+    def constrain_models(self, model_list, expansion_coefficients=None, convergence_correlation=None, convergence_MSE=None):
         # Main function for constraining different models!
         # 'model_list' is a list of cambbest.Model instances
         # Returns a pandas DataFrame containing the results
 
-        if decomposition_coefficients is None:
-            coeff, shape_cov, conv_corr, conv_MSE = self.modal_decomposition(model_list, check_convergence=True)
+        if expansion_coefficients is None:
+            coeff, shape_cov, conv_corr, conv_MSE = self.basis_expansion(model_list, check_convergence=True)
             shape_covariance = shape_cov
             convergence_correlation = conv_corr
             convergence_MSE = conv_MSE
         else:
-            coeff = decomposition_coefficients
+            coeff = expansion_coefficients
+
 
         if self.basis_type == "Legendre2015" and self.mode_p_max == 30:
             # Due to differences in convention, there is a factor of 3/5 missing.
@@ -795,9 +774,9 @@ class Basis:
 
 
         # Constraints
-        beta = self.beta                # (N_sims, p_max**3)
-        beta_LISW = self.beta_LISW      # (p_max**3)
-        gamma = self.gamma              # (p_max**3, p_max**3)
+        beta = self.beta                # (N_sims, n_modes)
+        beta_LISW = self.beta_LISW      # (n_modes)
+        gamma = self.gamma              # (n_modes, n_modes)
         f_sky = self.parameter_f_sky
 
         # Two factors coming from 1) Changing zeta -> phi (3/5)
@@ -823,62 +802,211 @@ class Basis:
         marginal_LISW_bias = ((1/6) * np.matmul(inverse_fisher_matrix,
                                             np.matmul(coeff, f_sky * beta_LISW)))   # (N_models)
 
-        # Save the results to a dataframe 
-        constraints_dataframe = pd.DataFrame()
 
-        if self.basis_type == "SineLegendre1000":
-            constraints_dataframe["shape_name"] = [model.shape_name + phase for model in model_list for phase in [" sin", " cos"]]
+        # Save the results
+        constraints = Constraints(basis=self,
+                                  model_list=model_list,
+                                  expansion_coefficients=expansion_coefficients,
+                                  convergence_correlation=convergence_correlation,
+                                  convergence_MSE=convergence_MSE,
+                                  fisher_matrix=fisher_matrix,
+                                  single_f_NL=single_f_NL,
+                                  single_fisher_sigma=single_fisher_sigma,
+                                  single_sample_sigma=single_sample_sigma,
+                                  single_LISW_bias=single_LISW_bias,
+                                  marginal_f_NL=marginal_f_NL,
+                                  marginal_fisher_sigma=marginal_fisher_sigma,
+                                  marginal_sample_sigma=marginal_sample_sigma,
+                                  marginal_LISW_bias=marginal_LISW_bias,
+                                 )
 
-            if convergence_correlation is not None:
-                constraints_dataframe["convergence_correlation"] = np.repeat(convergence_correlation, 2)
-                convergence_epsilon = np.sqrt(2 - 2 * convergence_correlation)
-                constraints_dataframe["convergence_epsilon"] = np.repeat(convergence_epsilon, 2)
-            if convergence_MSE is not None:
-                constraints_dataframe["convergence_MSE"] = np.repeat(convergence_MSE, 2)
+        return constraints
+
+
+
+class Constraints:
+    ''' Class for storing cmbbest's computation results (constraints).
+        Contains references (pointers) to the basis and model list '''
+
+    def __init__(self, **kwargs):
+        #  Core info: basis, model, and coefficients
+        self.basis = kwargs.get("basis")
+        self.model_list = kwargs.get("model_list")
+        self.expansion_coefficients = kwargs.get("expansion_coefficients")
+
+        # Basis expansion related data
+        self.convergence_correlation = kwargs.get("convergence_correlation")
+        self.convergence_epsilon = kwargs.get("convergence_epsilon")
+        self.convergence_MSE = kwargs.get("convergence_MSE")
+
+        # Single shape analysis results
+        self.fisher_matrix = kwargs.get("fisher_matrix")
+        self.single_f_NL = kwargs.get("single_f_NL")
+        self.single_fisher_sigma = kwargs.get("single_fisher_sigma")
+        self.single_sample_sigma = kwargs.get("single_sample_sigma")
+        self.single_LISW_bias = kwargs.get("single_LISW_bias")
+
+        # Multi shape analysis results
+        self.marginal_f_NL = kwargs.get("marginal_f_NL")
+        self.marginal_fisher_sigma = kwargs.get("marginal_fisher_sigma")
+        self.marginal_sample_sigma = kwargs.get("marginal_sample_sigma")
+        self.marginal_LISW_bias = kwargs.get("marginal_LISW_bias")
+    
+
+    def to_dataframe(self, full_result=False):
+        # Return the results as a pandas dataframe 
+        # If full_result=True, also show results from simulations 
+
+        df = pd.DataFrame()
+
+        if self.basis.basis_type == "SineLegendre1000":
+            df["shape_name"] = [model.shape_name + phase for model in self.model_list for phase in [" sin", " cos"]]
+
+            if self.convergence_correlation is not None:
+                df["convergence_correlation"] = np.repeat(self.convergence_correlation, 2)
+                df["convergence_epsilon"] = np.repeat(np.sqrt(2 - 2 * self.convergence_correlation), 2)
+            if self.convergence_MSE is not None:
+                df["convergence_MSE"] = np.repeat(self.convergence_MSE, 2)
 
         else:
-            constraints_dataframe["shape_name"] = [model.shape_name for model in model_list]
+            df["shape_name"] = [model.shape_name for model in self.model_list]
 
-            if convergence_correlation is not None:
-                constraints_dataframe["convergence_correlation"] = convergence_correlation
-                convergence_epsilon = np.sqrt(2 - 2 * convergence_correlation)
-                constraints_dataframe["convergence_epsilon"] = convergence_epsilon
-            if convergence_MSE is not None:
-                constraints_dataframe["convergence_MSE"] = convergence_MSE
+            if self.convergence_correlation is not None:
+                df["convergence_correlation"] = self.convergence_correlation
+                df["convergence_epsilon"] = np.sqrt(2 - 2 * self.convergence_correlation)
+            if self.convergence_MSE is not None:
+                df["convergence_MSE"] = self.convergence_MSE
         
-        constraints_dataframe = constraints_dataframe.join(pd.DataFrame(
+        df = df.join(pd.DataFrame(
                                     {
-                                        "single_f_NL": single_f_NL[:,0],      # The 0th map is the observed map
-                                        "single_fisher_sigma": single_fisher_sigma,
-                                        "single_sample_sigma": single_sample_sigma,
-                                        "single_LISW_bias": single_LISW_bias,
-                                        "marginal_f_NL": marginal_f_NL[:,0],
-                                        "marginal_fisher_sigma": marginal_fisher_sigma,
-                                        "marginal_sample_sigma": marginal_sample_sigma,
-                                        "marginal_LISW_bias": marginal_LISW_bias
+                                        "single_f_NL": self.single_f_NL[:,0],      # The 0th map is the observed map
+                                        "single_fisher_sigma": self.single_fisher_sigma,
+                                        "single_sample_sigma": self.single_sample_sigma,
+                                        "single_LISW_bias": self.single_LISW_bias,
+                                        "marginal_f_NL": self.marginal_f_NL[:,0],
+                                        "marginal_fisher_sigma": self.marginal_fisher_sigma,
+                                        "marginal_sample_sigma": self.marginal_sample_sigma,
+                                        "marginal_LISW_bias": self.marginal_LISW_bias
                                     }))
         
         if full_result:
             # Include all simulation map constraints
-            df = constraints_dataframe
-            n_maps = single_f_NL.shape[1]
-            constraints_dataframe = df.loc[df.index.repeat(n_maps)].reset_index()     # Duplicate rows (n_maps) times
+            n_maps = self.single_f_NL.shape[1]
+            n_models = len(self.model_list)
+
+            # Duplicate rows (n_maps) times
+            df = df.loc[df.index.repeat(n_maps)].reset_index()
 
             # Insert map number values 
             map_no_index = df.columns.get_loc("single_f_NL") + 1
-            map_no_values = np.tile(np.arange(n_maps), coeff.shape[0])
-            constraints_dataframe.insert(map_no_index, "map_number", map_no_values)
+            map_no_values = np.tile(np.arange(n_maps), n_models) 
+            df.insert(map_no_index, "map_number", map_no_values)
 
             # Add correct f_NL values for each map
-            constraints_dataframe["single_f_NL"] = single_f_NL.flatten()
-            constraints_dataframe["marginal_f_NL"] = marginal_f_NL.flatten()
+            df["single_f_NL"] = self.single_f_NL.flatten()
+            df["marginal_f_NL"] = self.marginal_f_NL.flatten()
+        
+        return df
+
+    
+    def to_csv(self, filename, full_result=True):
+        # Save the results to a csv file
+        # If full_result=True, also save results from simulations 
+
+        df = self.to_dataframe(full_result=full_result)
+        df.to_csv(filename, float_format=".18e")
+    
+
+    def summary_df(self, constraint_type="single"):
+        # Summarize the results as a dataframe
+        # "single" for independent shape analysis, and
+        # "joint" for joint (marginalised) shape analysis.
+
+        df = self.to_dataframe(full_result=False)
+
+        if constraint_type == "single":
+            df = df[["shape_name", "single_f_NL", "single_sample_sigma"]]
+            df["signal_to_noise"] = df["single_f_NL"] / df["single_sample_sigma"]
+
+        elif constraint_type == "joint":
+            df = df[["shape_name", "marginal_f_NL", "marginal_sample_sigma"]]
+            df["signal_to_noise"] = df["marginal_f_NL"] / df["marginal_sample_sigma"]
+        
+        return df
 
 
-        if return_fisher:
-            return constraints_dataframe, fisher_matrix
-        else:
-            return constraints_dataframe
+    def summary_latex(self, constraint_type="single", formatter=None):
+        # Summarize the results as a latex table
+        # "single" for independent shape analysis, and
+        # "joint" for joint (marginalised) shape analysis.
 
+        df = self.summary_df(constraint_type=constraint_type)
+
+        if formatter is None:
+            if constraint_type == "single":
+                formatter = lambda row: "${:.1e} \pm {:.1e}$".format(row["single_f_NL"], row["single_sample_sigma"])
+
+            elif constraint_type == "joint":
+                formatter = lambda row: "${:.1e} \pm {:.1e}$".format(row["marginal_f_NL"], row["marginal_sample_sigma"])
+
+        df["Shape"] = df["shape_name"]
+        df["Constraint"] = df.apply(formatter, axis=1)
+        
+        if constraint_type == "single":
+            df["$f_\mathrm{NL}/\sigma(f_\mathrm{NL})$"] = df["single_f_NL"] / df["single_sample_sigma"]
+
+        elif constraint_type == "joint":
+            df["$f_\mathrm{NL}/\sigma(f_\mathrm{NL})$"] = df["marginal_f_NL"] / df["marginal_sample_sigma"]
+        
+        df = df[["Shape", "Constraint", "$f_\mathrm{NL}/\sigma(f_\mathrm{NL})$"]]
+        
+        return df.to_latex(index=False)
+    
+
+    def shape_correlation_matrix(self):
+        # The correlation ('cosine') matrix of models under study
+
+        fisher = self.fisher_matrix
+        fisher_diag = np.diag(fisher)
+        corr = fisher / np.sqrt(fisher_diag[:,np.newaxis] * fisher_diag[np.newaxis,:])
+
+        return corr
+
+
+    def triangle_plot(constraints_list, constraints_labels=None, shape_names=None, shape_labels=None, fig_width_inch=6., plot_kwargs={}):
+        # A triangle plot for fNL constraints using fisher error and GetDist 
+
+        import getdist
+        from getdist import plots
+        from getdist.gaussian_mixtures import GaussianND
+
+        N_c = len(constraints_list)
+        model_list = constraints_list[0].model_list
+        N_m = len(model_list)
+
+        if constraints_labels is None:
+            constraints_labels = [f"#{i}" for i in range(N_c)]
+        if shape_names is None:
+            shape_names = [m.shape_name for m in model_list]
+        if shape_labels is None:
+            shape_labels = shape_names
+
+        sub_inds = np.array([i for i in range(N_m) if model_list[i].shape_name in shape_names])
+
+        # Likelihoods
+        fisher_list = [GaussianND(c.marginal_f_NL[sub_inds,0],
+                                  #np.linalg.inv((c.fisher_matrix)[sub_inds,:][:,sub_inds]),
+                                  (c.fisher_matrix)[sub_inds,:][:,sub_inds], is_inv_cov=True,
+                                  names=shape_names,
+                                  labels=shape_labels,
+                                  label=l)
+                        for c, l in zip(constraints_list, constraints_labels)]
+
+        g = plots.get_subplot_plotter(width_inch=fig_width_inch)
+        g.settings.figure_legend_frame = False
+        g.triangle_plot(fisher_list, **plot_kwargs)
+
+        return g
 
 
 class Model:
@@ -896,17 +1024,17 @@ class Model:
             self.shape_function_values = kwargs["shape_function_values"]
             self.shape_function = self.custom_shape_function_from_evals()
         
-        elif shape_type == "custom_shape_function":
+        elif shape_type == "custom":
             # Custom shape function specified by the given function
             self.shape_name = kwargs.get("shape_name", "custom")
-            self.shape_function = kwargs["custom_shape_function"]
+            self.shape_function = kwargs["shape_function"]
         
         else:
             # Preset shapes
             preset_shapes_list = ["local", "equilateral", "orthogonal"]
 
             if shape_type == "local":
-                self.shape_name = "local"
+                self.shape_name = kwargs.get("shape_name", "local")
                 self.parameter_A_scalar = kwargs.get("parameter_A_scalar", BASE_A_S)   # Scalar power spectrum amplitude
                 self.parameter_n_scalar = kwargs.get("parameter_n_scalar", BASE_N_SCALAR)    # Scalar spectral index
                 self.parameter_k_pivot = kwargs.get("parameter_k_pivot", 0.05)            # k value where P(k) = A_s
@@ -914,7 +1042,7 @@ class Model:
                 self.shape_function = self.local_shape_function()
 
             elif shape_type == "equilateral" or shape_type == "equil":
-                self.shape_name = "equilateral"
+                self.shape_name = kwargs.get("shape_name", "equilateral")
                 self.parameter_A_scalar = kwargs.get("parameter_A_scalar", BASE_A_S)   # Scalar power spectrum amplitude
                 self.parameter_n_scalar = kwargs.get("parameter_n_scalar", BASE_N_SCALAR)    # Scalar spectral index
                 self.parameter_k_pivot = kwargs.get("parameter_k_pivot", 0.05)    # k value where P(k) = A_s
@@ -922,7 +1050,7 @@ class Model:
                 self.shape_function = self.equilateral_shape_function()
                 
             elif shape_type == "orthogonal" or shape_type == "ortho":
-                self.shape_name = "orthogonal"
+                self.shape_name = kwargs.get("shape_name", "orthogonal")
                 self.parameter_A_scalar = kwargs.get("parameter_A_scalar", BASE_A_S)   # Scalar power spectrum amplitude
                 self.parameter_n_scalar = kwargs.get("parameter_n_scalar", BASE_N_SCALAR)    # Scalar spectral index
                 self.parameter_k_pivot = kwargs.get("parameter_k_pivot", 0.05)    # k value where P(k) = A_s
@@ -930,16 +1058,19 @@ class Model:
                 self.shape_function = self.orthogonal_shape_function()
 
             else:
-                print("Shape type '{}' is currently not supported".format(shape_type)) 
+                print("Shape type preset '{}' is currently not supported".format(shape_type)) 
                 print("Supported shapes:", str(preset_shapes_list))
                 return
         
 
     def custom_shape_function_from_evals(self):
         # Performs a 3D linear interporlation to evaluate the shape function
-        # !TODO
+
+        interp = RegularGridInterpolator((self.grid_k_1, self.grid_k_2, self.grid_k_3), self.shape_function_values)
+
         def shape_function(k_1, k_2, k_3):
-            pass
+            ks = np.column_stack([k_1, k_2, k_3])
+            return interp(ks)
         
         return shape_function
 
