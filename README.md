@@ -3,21 +3,26 @@ A code for CMB bispectrum estimation of primordial non-Gaussianity. For mathemat
 
 ## Dependencies
 
+- Python
 - gcc
-- numpy
-- scipy
-- Cython
-- h5py
-- pandas
-- GetDist (optional for visualization)
+- Python libraries:
+    - numpy
+    - scipy
+    - Cython
+    - h5py
+    - pandas
+    - GetDist (optional for visualization)
 
 
 ## Installation
+First of all, please check if you have installed the dependencies listed above. If your default Python3 command is not 'python3', change it in the makefile accordingly.
+
 Clone the repository by, e.g.,
 ```
 git clone https://github.com/Wuhyun/CMB-BEST.git
 ```
-Inside the cloned repo, compile the library using
+
+Compile the library using
 ```
 $ make
 ```
@@ -25,21 +30,17 @@ To install the library, run
 ```
 $ make lib
 ```
-which is equivalent to 
-```
-$ python -m install -e .
-``` 
- This installs the library 'cmbbest' in development mode. To update the library, running
+This installs the library 'cmbbest' in development mode. To update the library, running
  ```
  git pull
  make
  ```
- will automatically do the trick.
+anytime will do the trick.
 
 
 ## Data
 
-A precomputed data file is required to use the library. Please download the HDF5 file below and keep in inside the "data" directory. At the moment, this is only given privately.
+A precomputed data file is required to use the library. Please download the HDF5 file below and keep in inside the "data" directory. At the moment, this data file is only given privately. Please contact wuhyun@kasi.re.kr if you are interested.
 
 
 ## Quick Start

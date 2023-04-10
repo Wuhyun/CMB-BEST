@@ -2,12 +2,13 @@ DIR := ${CURDIR}
 SRC := ${DIR}/src
 OBJ := ${DIR}/objects
 
+PYTHON := python3
 
 cmbbest:
-	python setup.py build_ext --inplace
+	${PYTHON} setup.py build_ext --inplace
 
 lib:
-	python -m pip install -e .
+	${PYTHON} -m pip install -e .
 
 clean:
 	rm -rf build/*
