@@ -3,7 +3,7 @@ A code for CMB bispectrum estimation of primordial non-Gaussianity. For mathemat
 
 ## Dependencies
 
-- Python
+- Python3
 - gcc
 - Python libraries:
     - numpy

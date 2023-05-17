@@ -134,7 +134,8 @@ class Basis:
             # we need to set up the 1D k grid and the 3D tetrapyd grid
 
             self.k_grid_size = kwargs.get("k_grid_size", 50) 
-            self.k_grid, self.k_weights = self.create_k_grid()
+            self.k_grid_type = kwargs.get("k_grid_type", "uniform") 
+            self.k_grid, self.k_weights = self.create_k_grid(grid_type=self.k_grid_type)
 
             precomputed_weights_path = kwargs.get("precomputed_weights_path", None)
             if precomputed_weights_path is None:
@@ -144,7 +145,12 @@ class Basis:
                 #print("Tetrapyd weights computed")
             else:
                 #print("Loading precomputed tetrapyd weights from", precomputed_weights_path)
-                self.tetrapyd_indices, self.tetrapyd_grid, self.tetrapyd_grid_weights = self.load_tetraquad(precomputed_weights_path)
+                #self.tetrapyd_indices, self.tetrapyd_grid, self.tetrapyd_grid_weights = self.load_tetraquad(precomputed_weights_path)
+                df = pd.read_csv(precomputed_weights_path)
+                inds = np.stack([df["i1"], df["i2"], df["i3"]], axis=0)
+                grid = np.stack([df["k1"], df["k2"], df["k3"]], axis=0)
+                weights = df["weights"].to_numpy()
+                self.tetrapyd_indices, self.tetrapyd_grid, self.tetrapyd_grid_weights = inds, grid, weights
                 self.tetrapyd_grid_size = self.tetrapyd_grid.shape[1]
         
         # Evaluate mode functions on 1D k grid
@@ -180,19 +186,37 @@ class Basis:
         
         path = self.data_path
 
+        # Conversion factor from B_\zeta to B_\Phi
+        if self.basis_type == "Legendre2015":
+            # Data is already for B_\Phi. Conversion not necessary
+            zeta_conv = 1.0   
+        else:
+            # Data is precomputed for B_\zeta, need to convert to B_\Phi
+            # \Phi = (3/5) \zeta at superhorizon scales
+            # Alphas obtain a factor of (3/5)**3,
+            # while the late-time B^{th}_{l1,l2,l3} need be fixed,
+            # so beta_\Phi = (5/3)**3 * beta_\zeta
+            # and gamma_\Phi = (5/3)**6 * beta_\gamma
+            zeta_conv = (5 / 3) ** 3
+
         with h5py.File(CMBBEST_DATA_FILE_PATH, "r") as hf:
             dg = hf[path]   # h5py data group
 
-            self.beta_cubic = np.array(dg["beta_cubic"])
-            self.beta_linear = np.array(dg["beta_linear"])
-            self.beta_LISW = np.array(dg["beta_LISW"])
-            self.gamma = np.array(dg["gamma"])
+            self.beta_cubic = zeta_conv * np.array(dg["beta_cubic"])
+            self.beta_linear = zeta_conv * np.array(dg["beta_linear"])
+            self.beta_LISW = zeta_conv * np.array(dg["beta_LISW"])
+            self.gamma = (zeta_conv ** 2) * np.array(dg["gamma"])
             self.beta = self.beta_cubic - 3 * self.beta_linear
 
             self.parameter_n_scalar = dg.attrs["parameter_n_scalar"]
             self.parameter_A_scalar = dg.attrs["parameter_A_scalar"]
             self.parameter_k_pivot = dg.attrs["parameter_k_pivot"]
             self.parameter_f_sky = dg.attrs["parameter_f_sky"]
+
+            # Parameter 'A' in Eq (1) of the Planck 2018 PNG paper (1905.05697)
+            self.parameter_delta_phi =  (2 * (np.pi ** 2) * ((3 / 5) ** 2)
+                                           * (self.parameter_k_pivot ** (1 - self.parameter_n_scalar))
+                                           * self.parameter_A_scalar)
 
             if dg.attrs["mode_orthogonalised"]:
                 self.orthogonalisation_coefficients = np.array(dg["orthogonalisation_coefficients"])
@@ -269,19 +293,6 @@ class Basis:
         # Note that the coefficients of orthogonalisation is fixed
         # for each basis set, regardless of the grid specifications
 
-        #if self.mode_p_max == 30:
-        #    orthogonalisation_coefficients = np.loadtxt("data/orthog_coeffs_p30")
-        #    normalisations = np.loadtxt("data/mode_norms_p30")
-            
-        #elif self.mode_p_max == 10:
-        #    orthogonalisation_coefficients = np.loadtxt("data/orthog_coeffs_p10")
-
-
-        allowed_p_max = [10, 30]
-        if self.mode_p_max not in allowed_p_max:
-            print("Legendre basis for p_max = {} is not precomputed yet".format(self.mode_p_max))
-            print("Allowed values: " + str(allowed_p_max))
-
         n_s = self.parameter_n_scalar
         k_max = self.mode_k_max
         k_min = self.mode_k_min
@@ -315,6 +326,7 @@ class Basis:
     
 
     def create_k_grid(self, grid_type="uniform"):
+        # Creates a 1D grid of k's from mode_k_min to mode_k_max
 
         if grid_type == "uniform":
             # Create a uniform one-dimensional k grid 
@@ -322,6 +334,11 @@ class Basis:
             k_weights = np.ones_like(k_grid) * (self.mode_k_max - self.mode_k_min) / (self.k_grid_size - 1)
             k_weights[0] /= 2
             k_weights[-1] /= 2
+        
+        elif grid_type == "GL":
+            gl_nodes, gl_weights = np.polynomial.legendre.leggauss(self.k_grid_size)
+            k_grid = self.mode_k_min + ((self.mode_k_max - self.mode_k_min) / 2) * (gl_nodes + 1)
+            k_weights = ((self.mode_k_max - self.mode_k_min) / 2) * gl_weights
         
         else:
             print("Grid type {} is currently unsupported".format(grid_type))
@@ -392,7 +409,6 @@ class Basis:
         cdef int n_samples = MC_N_SAMPLES
 
         # Call C routine
-        #cdef np.ndarray[np.double_t] tetra_weights = np.zeros(self.tetrapyd_grid_size, dtype=np.double)
         tetra_weights = np.zeros(self.tetrapyd_grid_size, dtype=np.dtype("d"))
         cdef double[:] tetra_weights_view = tetra_weights
         monte_carlo_tetrapyd_weights(&tetra_weights_view[0], 
@@ -517,11 +533,6 @@ class Basis:
         mode_bispectra_covariance = np.zeros((n_modes, n_modes), dtype=np.dtype("d"))
         cdef double [:,::1] mode_bispectra_covariance_view = mode_bispectra_covariance
 
-        #print("start!")
-        #print(n_modes, mode_p_max, k_npts, tetra_npts)
-
-        #print(self.mode_function_evaluations[-1,i1])
-
         # Call the wrapped C function
         compute_mode_bispectra_covariance(&mode_bispectra_covariance_view[0,0],
                         &tetra_weights[0], <int *> &tetra_i1[0], <int *> &tetra_i2[0], <int *> &tetra_i3[0], tetra_npts,
@@ -531,7 +542,7 @@ class Basis:
         return mode_bispectra_covariance 
     
 
-    def basis_expansion(self, model_list, check_convergence=True):
+    def basis_expansion(self, model_list, check_convergence=True, silent=False):
         # Expand given model shape functions with respect to separable basis
 
         N_models = len(model_list)
@@ -561,19 +572,19 @@ class Basis:
 
         # Use conjugate gradient algorithm to solve (alpha @ QQ = QS)
         # 'alpha' is a matrix of size (N_models, N_modes)
-        #norms = np.ones_like(norms) #TEST!!
-        #norms = np.diag(self.gamma) ** (+0.5) #TEST!!
         QQ_tilde = QQ / norms[:,np.newaxis] / norms[np.newaxis,:]     # Normalise modes
         alpha = np.zeros((N_models, N_modes))
         for model_no in range(N_models):
             QS_tilde = QS[model_no,:] / norms   # Normalise mode
             alpha_tilde, exit_code = conjugate_gradient(QQ_tilde, QS_tilde, tol=1e-8, atol=0, maxiter=min([10*N_modes, 10000]))
             #print("Shape #{}/{} expanded using CG with exit code {}".format(model_no+1, N_models, exit_code))
-            print("Shape #{}/{} expanded".format(model_no+1, N_models))
+            if not silent:
+                print("Shape #{}/{} expanded".format(model_no+1, N_models))
             alpha[model_no,:] = alpha_tilde / norms          # Reintroduce normalisation factor
 
         expansion_coefficients = alpha
-        print("Expansion complete.")
+        if not silent:
+            print("Expansion complete.")
 
         if check_convergence:
             # Optional check on convergence of the mode expansion
@@ -711,7 +722,6 @@ class Basis:
         return QS
 
 
-
     def constrain_models(self, model_list, expansion_coefficients=None, convergence_correlation=None, convergence_MSE=None):
         # Main function for constraining different models!
         # 'model_list' is a list of cambbest.Model instances
@@ -719,6 +729,7 @@ class Basis:
 
         if expansion_coefficients is None:
             coeff, shape_cov, conv_corr, conv_MSE = self.basis_expansion(model_list, check_convergence=True)
+            expansion_coefficients = coeff
             shape_covariance = shape_cov
             convergence_correlation = conv_corr
             convergence_MSE = conv_MSE
@@ -726,11 +737,6 @@ class Basis:
             coeff = expansion_coefficients
 
 
-        if self.basis_type == "Legendre2015" and self.mode_p_max == 30:
-            # Due to differences in convention, there is a factor of 3/5 missing.
-            # This is only a temporary solution - will be updated soon!
-            coeff = coeff * ((3 / 5) ** 3)
-        
         if self.basis_type == "SineLegendre1000":
             # For the targeted basis, 'coeff' is the expansion coeff of the envelope
             # with respect to Legendre basis. For the full constraints, need the coefficents
@@ -779,12 +785,7 @@ class Basis:
         gamma = self.gamma              # (n_modes, n_modes)
         f_sky = self.parameter_f_sky
 
-        # Two factors coming from 1) Changing zeta -> phi (3/5)
-        # and 2) dimensionless power spectrum convention (2 * pi**2)
-        coeff = coeff * (2 * np.pi ** 2) ** 2 * (3 / 5)
-
         fisher_matrix = np.matmul(coeff, np.matmul(coeff, gamma).T) * f_sky / 6.
-        inverse_fisher_matrix = np.linalg.inv(fisher_matrix)
         # Note that f_NL constraints account for the lensing-ISW bias
         coeff_dot_beta = np.matmul(coeff, (beta - f_sky * beta_LISW[np.newaxis,:]).T)   # (N_models, N_sims)
 
@@ -796,11 +797,23 @@ class Basis:
                                 / np.diag(fisher_matrix))                           # (N_models)
 
         # Marginalise over other models
-        marginal_f_NL = (1/6) * np.matmul(inverse_fisher_matrix, coeff_dot_beta)    # (N_models, N_sims)
-        marginal_fisher_sigma = np.sqrt(np.diag(inverse_fisher_matrix))             # (N_models)
-        marginal_sample_sigma = np.std(marginal_f_NL[:,1:], axis=1)                 # (N_models)
-        marginal_LISW_bias = ((1/6) * np.matmul(inverse_fisher_matrix,
-                                            np.matmul(coeff, f_sky * beta_LISW)))   # (N_models)
+        try:
+            inverse_fisher_matrix = np.linalg.inv(fisher_matrix)
+            marginal_f_NL = (1/6) * np.matmul(inverse_fisher_matrix, coeff_dot_beta)    # (N_models, N_sims)
+            marginal_fisher_sigma = np.sqrt(np.diag(inverse_fisher_matrix))             # (N_models)
+            marginal_sample_sigma = np.std(marginal_f_NL[:,1:], axis=1)                 # (N_models)
+            marginal_LISW_bias = ((1/6) * np.matmul(inverse_fisher_matrix,
+                                                np.matmul(coeff, f_sky * beta_LISW)))   # (N_models)
+        except np.linalg.LinAlgError as err:
+            if 'Singular matrix' in str(err):
+                print("Skipping marginal constraints due to colinearity in the models considered.")
+                inverse_fisher_matrix = None
+                marginal_f_NL = None
+                marginal_fisher_sigma = None
+                marginal_sample_sigma = None
+                marginal_LISW_bias = None
+            else:
+                raise
 
 
         # Save the results
@@ -834,6 +847,13 @@ class Constraints:
         self.model_list = kwargs.get("model_list")
         self.expansion_coefficients = kwargs.get("expansion_coefficients")
 
+        # Deep copies of some basis and model information
+        self.basis_type = self.basis.basis_type
+        self.mode_p_max = self.basis.mode_p_max
+        self.polarization_on = self.basis.polarization_on
+        self.n_models = len(self.model_list)
+        self.shape_name_list = [model.shape_name for model in self.model_list]
+
         # Basis expansion related data
         self.convergence_correlation = kwargs.get("convergence_correlation")
         self.convergence_epsilon = kwargs.get("convergence_epsilon")
@@ -859,8 +879,8 @@ class Constraints:
 
         df = pd.DataFrame()
 
-        if self.basis.basis_type == "SineLegendre1000":
-            df["shape_name"] = [model.shape_name + phase for model in self.model_list for phase in [" sin", " cos"]]
+        if self.basis_type == "SineLegendre1000":
+            df["shape_name"] = [name + phase for name in self.shape_name_list for phase in [" sin", " cos"]]
 
             if self.convergence_correlation is not None:
                 df["convergence_correlation"] = np.repeat(self.convergence_correlation, 2)
@@ -869,7 +889,7 @@ class Constraints:
                 df["convergence_MSE"] = np.repeat(self.convergence_MSE, 2)
 
         else:
-            df["shape_name"] = [model.shape_name for model in self.model_list]
+            df["shape_name"] = self.shape_name_list
 
             if self.convergence_correlation is not None:
                 df["convergence_correlation"] = self.convergence_correlation
@@ -877,22 +897,33 @@ class Constraints:
             if self.convergence_MSE is not None:
                 df["convergence_MSE"] = self.convergence_MSE
         
-        df = df.join(pd.DataFrame(
-                                    {
-                                        "single_f_NL": self.single_f_NL[:,0],      # The 0th map is the observed map
-                                        "single_fisher_sigma": self.single_fisher_sigma,
-                                        "single_sample_sigma": self.single_sample_sigma,
-                                        "single_LISW_bias": self.single_LISW_bias,
-                                        "marginal_f_NL": self.marginal_f_NL[:,0],
-                                        "marginal_fisher_sigma": self.marginal_fisher_sigma,
-                                        "marginal_sample_sigma": self.marginal_sample_sigma,
-                                        "marginal_LISW_bias": self.marginal_LISW_bias
-                                    }))
+        if self.marginal_f_NL is None:
+            # Independent constraints only
+            df = df.join(pd.DataFrame(
+                                        {
+                                            "single_f_NL": self.single_f_NL[:,0],      # The 0th map is the observed map
+                                            "single_fisher_sigma": self.single_fisher_sigma,
+                                            "single_sample_sigma": self.single_sample_sigma,
+                                            "single_LISW_bias": self.single_LISW_bias,
+                                        }))
+        else:
+            # All constraints
+            df = df.join(pd.DataFrame(
+                                        {
+                                            "single_f_NL": self.single_f_NL[:,0],      # The 0th map is the observed map
+                                            "single_fisher_sigma": self.single_fisher_sigma,
+                                            "single_sample_sigma": self.single_sample_sigma,
+                                            "single_LISW_bias": self.single_LISW_bias,
+                                            "marginal_f_NL": self.marginal_f_NL[:,0],
+                                            "marginal_fisher_sigma": self.marginal_fisher_sigma,
+                                            "marginal_sample_sigma": self.marginal_sample_sigma,
+                                            "marginal_LISW_bias": self.marginal_LISW_bias
+                                        }))
         
         if full_result:
             # Include all simulation map constraints
             n_maps = self.single_f_NL.shape[1]
-            n_models = len(self.model_list)
+            n_models = self.n_models
 
             # Duplicate rows (n_maps) times
             df = df.loc[df.index.repeat(n_maps)].reset_index()
@@ -904,7 +935,8 @@ class Constraints:
 
             # Add correct f_NL values for each map
             df["single_f_NL"] = self.single_f_NL.flatten()
-            df["marginal_f_NL"] = self.marginal_f_NL.flatten()
+            if self.marginal_f_NL is not None:
+                df["marginal_f_NL"] = self.marginal_f_NL.flatten()
         
         return df
 
@@ -917,7 +949,14 @@ class Constraints:
         df.to_csv(filename, float_format=".18e")
     
 
-    def summary_df(self, constraint_type="single"):
+    def to_file(self, filename):
+        # Save the full constraints to a hdf5 file so that
+        # the computationally expensive contents can be loaded easily in the future
+        # TODO
+        pass
+    
+
+    def summarize(self, constraint_type="single"):
         # Summarize the results as a dataframe
         # "single" for independent shape analysis, and
         # "joint" for joint (marginalised) shape analysis.
@@ -935,12 +974,12 @@ class Constraints:
         return df
 
 
-    def summary_latex(self, constraint_type="single", formatter=None):
+    def summarize_latex(self, constraint_type="single", formatter=None):
         # Summarize the results as a latex table
         # "single" for independent shape analysis, and
         # "joint" for joint (marginalised) shape analysis.
 
-        df = self.summary_df(constraint_type=constraint_type)
+        df = self.summarize(constraint_type=constraint_type)
 
         if formatter is None:
             if constraint_type == "single":
@@ -964,13 +1003,19 @@ class Constraints:
     
 
     def shape_correlation_matrix(self):
-        # The correlation ('cosine') matrix of models under study
+        # The correlation matrix of the models under study
 
         fisher = self.fisher_matrix
         fisher_diag = np.diag(fisher)
         corr = fisher / np.sqrt(fisher_diag[:,np.newaxis] * fisher_diag[np.newaxis,:])
 
         return corr
+
+
+    def from_file(filename):
+        # Load the full constraints from a hdf5 file,
+        # saved using the to_file() function
+        pass
 
 
     def triangle_plot(constraints_list, constraints_labels=None, shape_names=None, shape_labels=None, fig_width_inch=6., plot_kwargs={}):
@@ -1026,6 +1071,9 @@ class Model:
         
         elif shape_type == "custom":
             # Custom shape function specified by the given function
+            # Takes 'shape_function' defined as
+            # S(k_1, k_2, k_3) := (k_1 k_2 k_3)^2 B_\Phi (k_1, k_2, k_3),
+            # where <\Phi \Phi \Phi> = B_\Phi(k_1, k_2, k_3) (2\pi)^3 \delta^{(3)}(\mathbf{K})
             self.shape_name = kwargs.get("shape_name", "custom")
             self.shape_function = kwargs["shape_function"]
         
@@ -1081,10 +1129,11 @@ class Model:
         A_s = self.parameter_A_scalar
         n_s = self.parameter_n_scalar
         k_pivot = self.parameter_k_pivot
+        delta_phi = 2 * (np.pi ** 2) * ((3 / 5) ** 2) * (k_pivot ** (1 - n_s)) * A_s
 
         def shape_function(k_1, k_2, k_3):
 
-            pref = 2 * (A_s ** 2) * pow(k_pivot, 2 * (1 - n_s))
+            pref = 2 * (delta_phi ** 2)
 
             S_1 = k_1 * k_1 * np.power(k_2 * k_3, n_s - 2)
             S_2 = k_2 * k_2 * np.power(k_3 * k_1, n_s - 2)
@@ -1102,10 +1151,11 @@ class Model:
         A_s = self.parameter_A_scalar
         n_s = self.parameter_n_scalar
         k_pivot = self.parameter_k_pivot
+        delta_phi = 2 * (np.pi ** 2) * ((3 / 5) ** 2) * (k_pivot ** (1 - n_s)) * A_s
 
         def shape_function(k_1, k_2, k_3):
 
-            pref = 6 * (A_s ** 2) * pow(k_pivot, 2 * (1 - n_s))
+            pref = 6 * (delta_phi ** 2)
 
             # Precompute different powers of k's: square, linear, constant, inverse
             k_1_sq = k_1 * k_1   
@@ -1148,10 +1198,11 @@ class Model:
         A_s = self.parameter_A_scalar
         n_s = self.parameter_n_scalar
         k_pivot = self.parameter_k_pivot
+        delta_phi = 2 * (np.pi ** 2) * ((3 / 5) ** 2) * (k_pivot ** (1 - n_s)) * A_s
 
         def shape_function(k_1, k_2, k_3):
 
-            pref = 6 * (A_s ** 2) * pow(k_pivot, 2 * (1 - n_s))
+            pref = 6 * (delta_phi ** 2)
 
             # Precompute different powers of k's: square, linear, constant, inverse
             k_1_sq = k_1 * k_1   
