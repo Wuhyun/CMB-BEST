@@ -1,18 +1,19 @@
 # CMB-BEST
-A code for CMB bispectrum estimation of primordial non-Gaussianity. For mathematical and implementational details, please refer to this paper.
+A code for CMB bispectrum estimation of primordial non-Gaussianity. For mathematical and implementational details, please refer to this paper: (arxiv link to be added). Please [contact me](mailto:wuhyun@kasi.re.kr) if you have any issues installing or using the code.
 
 ## Dependencies
 
-- Python3
-- gcc
-- Python libraries:
+- gcc or some other C compiler
+- Python 3.7 or above
+- Python packages:
+    - Cython
     - numpy
     - scipy
-    - Cython
     - h5py
     - pandas
     - GetDist (optional for visualization)
 
+The packages can be installed using [conda](https://conda.io/projects/conda/en/latest/user-guide/getting-started.html#) or [pip3](https://packaging.python.org/en/latest/tutorials/installing-packages/).
 
 ## Installation
 First of all, please check if you have installed the dependencies listed above. If your default Python3 command is not 'python3', change it in the makefile accordingly.
@@ -40,7 +41,7 @@ anytime will do the trick.
 
 ## Data
 
-A precomputed data file is required to use the library. Please download the HDF5 file below and keep in inside the "data" directory. At the moment, this data file is only given privately. Please contact wuhyun@kasi.re.kr if you are interested.
+A precomputed data file is required to use the package. Please download the HDF5 file from this [Google Drive link](https://drive.google.com/file/d/10BGPCXAtkWF23eZi4R_P-PYVd4NBtGnq/view?usp=share_link) and keep the file inside the "data" directory.
 
 
 ## Quick Start
@@ -53,5 +54,5 @@ basis = best.Basis()
 models = [best.Model("local")]
 constraints = basis.constrain_models(models)
 
-print(constraints.summary_df())
+print(constraints.summarize())
 ```

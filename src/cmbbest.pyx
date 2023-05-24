@@ -16,8 +16,6 @@ CMB_T0 = 2.72548
 PLANCK_F_SKY_T = 0.77941
 BASE_A_S = 2.100549E-9
 BASE_N_SCALAR = 0.9649
-J_DELTA_PHI = 1.5714e-8
-J_N_SCALAR = 0.9648
 
 CURRENT_PATH = os.path.dirname(os.path.realpath(__file__)) 
 CMBBEST_DATA_FILE_PATH =  os.path.join(CURRENT_PATH, "data/cmbbest_data.hdf5")
@@ -111,12 +109,6 @@ class Basis:
         elif basis_type == "Legendre" and mode_p_max == 30 and polarization_on:
             self.data_path = "legendre/hires/TP"
 
-        elif basis_type == "Legendre2015" and mode_p_max == 30 and not polarization_on:
-            self.data_path = "legendre/hires_2015/T"
-
-        elif basis_type == "Legendre2015" and mode_p_max == 30 and polarization_on:
-            self.data_path = "legendre/hires_2015/TP"
-
         elif basis_type == "SineLegendre1000" and mode_p_max == 10 and polarization_on:
             self.data_path = "legendre/sinleg/TP"
 
@@ -187,17 +179,13 @@ class Basis:
         path = self.data_path
 
         # Conversion factor from B_\zeta to B_\Phi
-        if self.basis_type == "Legendre2015":
-            # Data is already for B_\Phi. Conversion not necessary
-            zeta_conv = 1.0   
-        else:
-            # Data is precomputed for B_\zeta, need to convert to B_\Phi
-            # \Phi = (3/5) \zeta at superhorizon scales
-            # Alphas obtain a factor of (3/5)**3,
-            # while the late-time B^{th}_{l1,l2,l3} need be fixed,
-            # so beta_\Phi = (5/3)**3 * beta_\zeta
-            # and gamma_\Phi = (5/3)**6 * beta_\gamma
-            zeta_conv = (5 / 3) ** 3
+        # Data is precomputed for B_\zeta, need to convert to B_\Phi
+        # \Phi = (3/5) \zeta at superhorizon scales
+        # Alphas obtain a factor of (3/5)**3,
+        # while the late-time B^{th}_{l1,l2,l3} need be fixed,
+        # so beta_\Phi = (5/3)**3 * beta_\zeta
+        # and gamma_\Phi = (5/3)**6 * beta_\gamma
+        zeta_conv = (5 / 3) ** 3
 
         with h5py.File(CMBBEST_DATA_FILE_PATH, "r") as hf:
             dg = hf[path]   # h5py data group
@@ -254,7 +242,7 @@ class Basis:
                 self.mode_k_max = 2e-1
                 self.mode_functions = self.monomial_basis()
 
-            elif self.basis_type == "Legendre" or self.basis_type == "Legendre2015":
+            elif self.basis_type == "Legendre":
                 self.mode_k_min = dg.attrs["mode_k_min"]
                 self.mode_k_max = dg.attrs["mode_k_max"]
                 self.mode_functions = self.legendre_basis(self.orthogonalisation_coefficients, self.mode_normalisations)
@@ -722,13 +710,13 @@ class Basis:
         return QS
 
 
-    def constrain_models(self, model_list, expansion_coefficients=None, convergence_correlation=None, convergence_MSE=None):
+    def constrain_models(self, model_list, expansion_coefficients=None, convergence_correlation=None, convergence_MSE=None, silent=False):
         # Main function for constraining different models!
         # 'model_list' is a list of cambbest.Model instances
         # Returns a pandas DataFrame containing the results
 
         if expansion_coefficients is None:
-            coeff, shape_cov, conv_corr, conv_MSE = self.basis_expansion(model_list, check_convergence=True)
+            coeff, shape_cov, conv_corr, conv_MSE = self.basis_expansion(model_list, check_convergence=True, silent=silent)
             expansion_coefficients = coeff
             shape_covariance = shape_cov
             convergence_correlation = conv_corr
@@ -992,14 +980,16 @@ class Constraints:
         df["Constraint"] = df.apply(formatter, axis=1)
         
         if constraint_type == "single":
-            df["$f_\mathrm{NL}/\sigma(f_\mathrm{NL})$"] = df["single_f_NL"] / df["single_sample_sigma"]
+            df["S/N"] = df["single_f_NL"] / df["single_sample_sigma"]
 
         elif constraint_type == "joint":
-            df["$f_\mathrm{NL}/\sigma(f_\mathrm{NL})$"] = df["marginal_f_NL"] / df["marginal_sample_sigma"]
+            df["S/N"] = df["marginal_f_NL"] / df["marginal_sample_sigma"]
+
+        df["$f_\mathrm{NL}/\sigma(f_\mathrm{NL})$"] = df.apply(lambda row: "{:.2f}".format(row["S/N"]), axis=1)
         
         df = df[["Shape", "Constraint", "$f_\mathrm{NL}/\sigma(f_\mathrm{NL})$"]]
         
-        return df.to_latex(index=False)
+        return df.to_latex(index=False, escape=False)
     
 
     def shape_correlation_matrix(self):
