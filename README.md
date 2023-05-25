@@ -1,5 +1,5 @@
 # CMB-BEST
-A code for CMB bispectrum estimation of primordial non-Gaussianity. For mathematical and implementational details, please refer to this paper: (arxiv link to be added). Please [contact me](mailto:wuhyun@kasi.re.kr) if you have any issues installing or using the code.
+A code for CMB bispectrum estimation of primordial non-Gaussianity. For mathematical and implementational details, please refer to [this paper](https://arxiv.org/abs/2305.14646). Please [contact me](mailto:wuhyun@kasi.re.kr) if you have any issues installing or using the code.
 
 ## Dependencies
 
