@@ -590,6 +590,69 @@ class Basis:
             return expansion_coefficients, shape_covariance
 
 
+    def pseudoinv_basis_expansion(self, model_list, check_convergence=True, silent=False):
+        # Expand given model shape functions with respect to separable basis
+        # Uses pseudoinverse!
+
+        N_models = len(model_list)
+        N_modes = self.mode_indices.shape[1]
+        Q = self.mode_bispectra_evaluations     # (N_modes, N_tetrapyd_points)
+        QQ = self.mode_bispectra_covariance     # (N_modes, N_modes)
+        norms = self.mode_bispectra_norms       # (N_modes)
+        sym_fact = self.mode_symmetry_factor    # (N_modes)
+        p1, p2, p3 = self.mode_indices          # (N_modes)
+        w = self.tetrapyd_grid_weights          # (N_tetrapyd_points)
+        k1, k2, k3 = self.tetrapyd_grid         # (N_tetrapyd_points)
+        p_max = self.mode_p_max
+
+        # Evaluate given shape functions and their covariance on a tetrapyd
+        # 'S' is a matrix of size (N_models, N_tetrapyd_points)
+        # S is assumed to be symmetric under permutations of k1, k2, k3
+        S = np.stack([model.shape_function(k1, k2 ,k3) for model in model_list])
+        shape_covariance = np.matmul(S * w[np.newaxis,:], S.T)
+
+        # Find the inner product between shapes and mode bispectra
+        # 'QS' is a matrix of size (N_models, N_modes)
+
+        if Q is None:
+            QS = self.compute_QS_C(S)      # Doesn't require having computed Q
+        else:
+            QS = np.matmul(S * w[np.newaxis,:], Q.T)       # Requires having computed Q
+
+        # Use the pseudoinverse of QQ
+        if not hasattr(self, "QQ_pinv"):
+            QQ_tilde = QQ / norms[:,np.newaxis] / norms[np.newaxis,:]     # Normalise modes
+            self.QQ_pinv = np.linalg.pinv(QQ_tilde, rcond=1e-14)
+
+
+        # Use the pseudoinverse to solve (alpha @ QQ = QS)
+        # 'alpha' is a matrix of size (N_models, N_modes)
+        alpha = np.zeros((N_models, N_modes))
+        QS_tilde = QS / norms[np.newaxis,:]
+
+        alpha_tilde = np.matmul(QS_tilde, self.QQ_pinv.T)
+        alpha = alpha_tilde / norms[np.newaxis,:]           # Reintroduce normalisation factor
+
+        expansion_coefficients = alpha
+        if not silent:
+            print("Expansion complete.")
+
+        if check_convergence:
+            # Optional check on convergence of the mode expansion
+            sum_SS = np.diag(shape_covariance)                      # <S, S>
+            sum_SR = np.sum(alpha * QS, axis=1)                     # <S, S_rec>    
+            sum_RR = np.sum(alpha * np.matmul(alpha, QQ), axis=1)   # <S_rec, S_rec>    
+
+            convergence_correlation = sum_SR / np.sqrt(sum_SS * sum_RR)
+            convergence_correlation = 1.0 - np.abs(1 - convergence_correlation)     # For when corr > 1 due to numerical errors
+            # convergence_epsilon = np.sqrt(2 - 2 * convergence_correlation)
+            convergence_MSE = np.abs(sum_SS + sum_RR - 2 * sum_SR) / sum_SS
+
+            return expansion_coefficients, shape_covariance, convergence_correlation, convergence_MSE
+        else:
+            return expansion_coefficients, shape_covariance
+
+
     @cython.boundscheck(False) # turn off bounds-checking for entire function
     @cython.wraparound(False)  # turn off negative index wrapping for entire function
     def compute_QS_cython(self, S):
