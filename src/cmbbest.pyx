@@ -21,6 +21,7 @@ CURRENT_PATH = os.path.dirname(os.path.realpath(__file__))
 CMBBEST_DATA_FILE_PATH =  os.path.join(CURRENT_PATH, "data/cmbbest_data.hdf5")
 
 def set_data_path(path):
+    global CMBBEST_DATA_FILE_PATH
     CMBBEST_DATA_FILE_PATH = path
 
 
@@ -107,7 +108,11 @@ class Basis:
             self.data_path = "legendre/base/TP"
 
         elif basis_type == "Legendre" and mode_p_max == 30 and polarization_on:
-            self.data_path = "legendre/hires/TP"
+            if kwargs.get("higher_resolution", False):
+                # TEST routine
+                self.data_path = "legendre/hires/TP_hires"
+            else:
+                self.data_path = "legendre/hires/TP"
 
         elif basis_type == "SineLegendre1000" and mode_p_max == 10 and polarization_on:
             self.data_path = "legendre/sinleg/TP"
@@ -228,10 +233,11 @@ class Basis:
                 self.k_grid_size = int(ds.attrs["tetrapyd_N_k"])
                 self.mode_k_min = dg.attrs["mode_k_min"]
                 self.mode_k_max = dg.attrs["mode_k_max"]
-                assert ds.attrs["quadrature"][-7:] == "uniform"        # TODO!: Relax this restriction
+                quad_dir = ds.attrs["quadrature"]
+                assert quad_dir[-7:] == "uniform" or quad_dir[-13:] == "uniform_hires"        # TODO!: Relax this restriction
                 self.k_grid, self.k_grid_weights = self.create_k_grid(grid_type="uniform")
 
-                quad_group = hf[ds.attrs["quadrature"]]
+                quad_group = hf[quad_dir]
                 self.tetrapyd_indices = np.array(quad_group["indices"])
                 self.tetrapyd_grid = np.array(quad_group["grid"])
                 self.tetrapyd_grid_weights = np.array(quad_group["weights"])
