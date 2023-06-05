@@ -21,6 +21,7 @@ CURRENT_PATH = os.path.dirname(os.path.realpath(__file__))
 CMBBEST_DATA_FILE_PATH =  os.path.join(CURRENT_PATH, "data/cmbbest_data.hdf5")
 
 def set_data_path(path):
+    global CMBBEST_DATA_FILE_PATH
     CMBBEST_DATA_FILE_PATH = path
 
 
