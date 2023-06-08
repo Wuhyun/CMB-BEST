@@ -11,11 +11,15 @@ from scipy.sparse.linalg import cg as conjugate_gradient
 import pandas as pd
 import h5py
 import itertools
+import matplotlib.pyplot as plt
 
 CMB_T0 = 2.72548
 PLANCK_F_SKY_T = 0.77941
 BASE_A_S = 2.100549E-9
 BASE_N_SCALAR = 0.9649
+BASE_K_PIVOT = 0.05
+BASE_K_MIN = 2.08759e-4
+BASE_K_MAX = 2.08759e-1
 
 CURRENT_PATH = os.path.dirname(os.path.realpath(__file__)) 
 CMBBEST_DATA_FILE_PATH =  os.path.join(CURRENT_PATH, "data/cmbbest_data.hdf5")
@@ -502,6 +506,32 @@ class Basis:
         return mode_bispectra_evaluations
 
 
+    def evaluate_modal_basis_on_grid(self, k1, k2, k3):
+        # Returns a (n_modes) X (shape of k1) sized array contianing
+        # 3D mode functions evaluations on a given k1, k2, k3 grid
+
+        p1, p2, p3 = self.mode_indices
+        evals_k1 = self.mode_functions(k1)
+        evals_k2 = self.mode_functions(k2)
+        evals_k3 = self.mode_functions(k3)
+
+        evals = np.zeros((len(p1), *k1.shape))
+        for pp1, pp2, pp3 in itertools.permutations([p1, p2, p3]):
+            evals = evals + (evals_k1[pp1,:] * evals_k2[pp2,:] * evals_k3[pp3,:] / 6)
+        
+        return evals
+
+
+    def evaluate_modal_bispectra_on_grid(self, coeffs, k1, k2, k3):
+        # Returns a (n_coeffs) X (shape of k1) sized array contianing
+        # 3D modal bispectrum evaluations on a given k1, k2, k3 grid
+
+        basis_evals = self.evaluate_modal_basis_on_grid(k1, k2, k3)
+        bisp_evals = np.matmul(coeffs, basis_evals)
+
+        return bisp_evals
+
+
     def compute_mode_bispectra_covariance_C(self):
         # Evaluate the covariance matrix ('QQ') between mode bispectra
         # (QQ)_{mn} := <Q_m, Q_n>
@@ -596,6 +626,14 @@ class Basis:
             return expansion_coefficients, shape_covariance
 
 
+    def precompute_pseudoinv(self, rcond=1e-12):
+        # Precompute the volue of the pseudoinverse
+        QQ = self.mode_bispectra_covariance     # (N_modes, N_modes)
+        norms = self.mode_bispectra_norms       # (N_modes)
+        QQ_tilde = QQ / norms[:,np.newaxis] / norms[np.newaxis,:]     # Normalise modes
+        self.QQ_pinv = np.linalg.pinv(QQ_tilde, rcond=rcond, hermitian=True)
+
+
     def pseudoinv_basis_expansion(self, model_list, check_convergence=True, silent=False):
         # Expand given model shape functions with respect to separable basis
         # Uses pseudoinverse!
@@ -627,9 +665,7 @@ class Basis:
 
         # Use the pseudoinverse of QQ
         if not hasattr(self, "QQ_pinv"):
-            QQ_tilde = QQ / norms[:,np.newaxis] / norms[np.newaxis,:]     # Normalise modes
-            self.QQ_pinv = np.linalg.pinv(QQ_tilde, rcond=1e-14)
-
+            self.precompute_pseudoinv()
 
         # Use the pseudoinverse to solve (alpha @ QQ = QS)
         # 'alpha' is a matrix of size (N_models, N_modes)
@@ -779,13 +815,16 @@ class Basis:
         return QS
 
 
-    def constrain_models(self, model_list, expansion_coefficients=None, convergence_correlation=None, convergence_MSE=None, silent=False):
+    def constrain_models(self, model_list, expansion_coefficients=None, convergence_correlation=None, convergence_MSE=None, silent=False, use_pseudoinverse=False):
         # Main function for constraining different models!
         # 'model_list' is a list of cambbest.Model instances
         # Returns a pandas DataFrame containing the results
 
         if expansion_coefficients is None:
-            coeff, shape_cov, conv_corr, conv_MSE = self.basis_expansion(model_list, check_convergence=True, silent=silent)
+            if use_pseudoinverse:
+                coeff, shape_cov, conv_corr, conv_MSE = self.pseudoinv_basis_expansion(model_list, check_convergence=True, silent=silent)
+            else:
+                coeff, shape_cov, conv_corr, conv_MSE = self.basis_expansion(model_list, check_convergence=True, silent=silent)
             expansion_coefficients = coeff
             shape_covariance = shape_cov
             convergence_correlation = conv_corr
@@ -891,6 +930,45 @@ class Basis:
                                  )
 
         return constraints
+    
+
+    def precompute_loglike(self):
+        # Precompute neccesary matrices for faster compution of the likelihood 
+        if not hasattr(self, "QQ_pinv"):
+            self.precompute_pseudoinv()
+
+        norms = self.mode_bispectra_norms
+        P = self.QQ_pinv / norms[np.newaxis,:] / norms[:,np.newaxis]
+        f_sky= self.parameter_f_sky
+        
+        pre_A = self.gamma
+        pre_B = (self.beta - f_sky * self.beta_LISW[np.newaxis,:]).T / np.sqrt(6 * f_sky)
+        self.loglike_precomputes = {"A": pre_A, "B": pre_B, "P": P}
+
+    def log_likelihood(self, models):
+        # Returns the log-likelihood of given model, taking fNL to be the MLE value
+        # Fast routine which utilises pseudoinverses
+        # Returns a (N_maps) array containing the log_likelihood values for the
+        # observed map and 160 Gaussian simulations
+
+        if not hasattr(self, "loglike_precomputes"):
+            # Precompute some matrices to speed up the process
+            self.precompute_loglike()
+
+        k1, k2, k3 = self.tetrapyd_grid
+        pre = self.loglike_precomputes
+
+        # Step 1 - evaluate the shape function
+        S = np.array([model.shape_function(k1, k2 ,k3) for model in models])
+
+        # Step 2 - compute the inner product <Q, S>
+        QS = self.compute_QS_C(S)
+
+        # Step 3 - compute log likelihood
+        coeffs = np.matmul(QS, pre["P"].T)
+        loglike = 0.5 * (np.matmul(coeffs, pre["B"]) ** 2) / np.sum((np.matmul(coeffs, pre["A"]) * coeffs), axis=1)[:,np.newaxis]
+
+        return loglike
 
 
 
@@ -928,7 +1006,31 @@ class Constraints:
         self.marginal_fisher_sigma = kwargs.get("marginal_fisher_sigma")
         self.marginal_sample_sigma = kwargs.get("marginal_sample_sigma")
         self.marginal_LISW_bias = kwargs.get("marginal_LISW_bias")
-    
+
+
+    def delta_log_likelihood(self, fNLs=None):
+        # Comptues the log-likelihood gain from assuming a model, compared to zero bispectrum.
+        # Assumes indendent shape analyses.
+        # If fNLs is None, takes the MLE values for fNLs
+
+        coeff = self.expansion_coefficients
+        basis = self.basis
+        beta = self.basis.beta                # (N_sims, n_modes)
+        beta_LISW = self.basis.beta_LISW      # (n_modes)
+        f_sky = self.basis.parameter_f_sky
+        fisher = self.fisher_matrix
+
+        beta = beta - f_sky * beta_LISW    # Subtract lensing-ISW bias
+        signal = np.matmul(coeff, beta[0,:] / 6)
+
+        if fNLs == "MLE":
+            # MLE values for fNL
+            dlnL = (1/2) * (signal ** 2) / np.diag(fisher)
+        else:
+            dlnL = fNLs * signal - (1/2) * fNLs ** 2 * np.diag(fisher) 
+
+        return dlnL
+
 
     def to_dataframe(self, full_result=False):
         # Return the results as a pandas dataframe 
@@ -1111,6 +1213,40 @@ class Constraints:
         g.triangle_plot(fisher_list, **plot_kwargs)
 
         return g
+    
+
+    def shape_plot(self, grid_type, n=200, model_labels=None, fig=None, ax=None):
+        # Plot a 1D 'slice' of the model shape functions specified by 'grid_type'
+        # If constraints is not None, additionally provide convergence checks for the modal expansion
+
+        if fig is None:
+            fig, ax = plt.subplots()
+        
+        if model_labels is None:
+            model_labels = [model.shape_name for model in self.model_list]
+
+        # Theorist's dimensionless shape function conversion factor
+        k_pivot, A_s, n_s = BASE_K_PIVOT, BASE_A_S, BASE_N_SCALAR
+        delta_phi = 2 * (np.pi ** 2) * ((3 / 5) ** 2) * (k_pivot ** (1 - n_s)) * A_s
+        fact = 3 * k_pivot ** (2 * (1 - n_s)) / (20 * delta_phi ** 2)
+
+        grid = get_1D_bispectrum_grid(grid_type, n=n)
+
+        rec_evals = self.basis.evaluate_modal_bispectra_on_grid(self.expansion_coefficients, grid["k1"], grid["k2"], grid["k3"])
+
+        for model, label, rec_eval in zip(self.model_list, model_labels, rec_evals):
+            evals = model.shape_function(grid["k1"], grid["k2"], grid["k3"])
+            color = next(ax._get_lines.prop_cycler)['color']
+            ax.plot(grid["x_axis"], fact * evals, c=color, label=label)
+            ax.plot(grid["x_axis"], -fact * evals, c=color, ls="--")
+            ax.plot(grid["x_axis"], fact * np.abs(rec_eval), "x", c=color)
+
+        ax.set_yscale("log")
+        ax.set_xlabel(grid["x_label"])
+        ax.set_ylabel(r"$S$" + grid["y_label"])
+        ax.legend()
+
+        return fig, ax
 
 
 class Model:
@@ -1296,3 +1432,198 @@ class Model:
             return S
         
         return shape_function
+
+
+# Some utility functions
+
+def get_1D_bispectrum_grid(grid_type, n=200, **kwargs):
+    # Coordinates (k1,k2,k3) used for a one-dimensional plot
+    # Returns k1, k2, k3, x_axis and optionally x_label, y_label
+
+    grid_type = grid_type.lower()
+
+    if grid_type in ["squeezed", "local"]:
+        # Squeezed limit: k1=k2=(K-k_min)/2, k3 = k_min
+        k_min = kwargs.get("k_min", BASE_K_MIN)
+        k_max = kwargs.get("k_max", BASE_K_MAX)
+
+        K = np.linspace(2 * k_min, 2 * k_max + k_min, n)
+
+        k1, k2, k3 = (K-k_min)/2, (K-k_min)/2, k_min * np.ones_like(K)
+        x_axis = K
+        x_label = r"$K=k_1+k_2+k_3$"
+        y_label = r"$(k, k, k_\mathrm{min})$"
+
+    elif grid_type in ["equil", "equilateral"]:
+        # Equilateral limit: k1=k2=k3=k,
+        k_min = kwargs.get("k_min", BASE_K_MIN)
+        k_max = kwargs.get("k_max", BASE_K_MAX)
+
+        K = np.linspace(3 * k_min, 3 * k_max, n)
+        k1, k2, k3 = K/3, K/3, K/3
+        x_axis = K
+        x_label = r"$K=k_1+k_2+k_3$"
+        y_label = r"$(k, k, k)$"
+
+    elif grid_type in ["flat", "flattened", "folded", "ortho", "orthogonal"]:
+        # Flattened limit: k1=k2=k, k3=2*k
+        k_min = kwargs.get("k_min", BASE_K_MIN)
+        k_max = kwargs.get("k_max", BASE_K_MAX)
+
+        K = np.linspace(4 * k_min, 2 * k_max, n)
+        k1, k2, k3 = K/4, K/4, K/2
+        x_axis = K
+        x_label = r"$K=k_1+k_2+k_3$"
+        y_label = r"$(k, k, 2k)$"
+    
+    elif grid_type in ["sef", "slice_sef"]:
+        # Line in a constant scale slice (K=k1+k2+k3=const),
+        # which connects Squeezed - Equilateral - Folded limits
+        # Have K fixed, k2 = k3 and the axis is 0 < r = (k1/k2) < 2 
+        K = kwargs.get("K", 3*BASE_K_PIVOT)
+
+        r = np.linspace(2/n, 2, n)
+        
+        # k1 = r * k2, so k1+k2+k3 = (r+2)*k2 = K
+        k1, k2, k3 = r*K/(2+r), K/(2+r), K/(2+r)
+        x_axis = r
+        x_label = r"$r=k_1/k_2$"
+        y_label = r"$(rk/(2+r),k/(2+r),k/(2+r))$"
+        
+    # Return the result as a dictionary
+    return {"k1": k1, "k2": k2, "k3": k3, "x_axis": x_axis, "x_label": x_label, "y_label": y_label}
+
+
+def get_2D_bispectrum_grid(grid_type, n=200, **kwargs):
+    # Coordinates (k1,k2,k3) used for a two-dimensional plot or a surface plot
+    # Returns k1, k2, k3, x_axis, y_axis and optionally x_label, y_label, z_label
+
+    grid_type = grid_type.lower()
+
+    if grid_type in ["triangle"]:
+        # Triangle shape grid,
+        # where K=k1+k2+k3 is fixed, k1 >= k2,k3 and the two axes are k2/k1 and k3/k1
+        # If symmetry=True, additionally inforce k2+k3>=k1 and k3>=k2.
+        K = kwargs.get("K", 3*BASE_K_PIVOT)
+        symmetry = kwargs.get("symmetry", True)
+    
+        ratios = np.linspace(1/n, 1, n)
+        r1, r2 = np.meshgrid(ratios, ratios, indexing="ij")
+        if symmetry:
+            sl = np.logical_and((r1 + r2 >= 1), (r2 >= r1))
+            r1, r2 = r1[sl], r2[sl]
+        
+        # k2 = r1*k1, k3 = r2*k1, so k1+k2+k3 = (1+r1+r2)*k1 = K
+        k1, k2, k3 = r1*K/(1+r1+r2), r2*K/(1+r1+r2), K/(1+r1+r2)
+        x_axis = r1.reshape(-1)
+        y_axis = r2.reshape(-1)
+        x_label = r"$r_1=k_1/k_3$"
+        y_label = r"$r_2=k_2/k_3$"
+        z_label = r"$(r_1 k/(1+r_1+r_2), r_2 k/(1+r_1+r_2), k/(1+r_1+r_2))$"
+        
+    # Return the result
+    return {"k1": k1, "k2": k2, "k3": k3, "x_axis": x_axis, "y_axis": y_axis,
+            "x_label": x_label, "y_label": y_label, "z_label": z_label}
+
+
+def plot_three_limits(model_list, n=200, model_labels=None, fig=None, axs=None):
+    # Plot the three limits of model shape functions,
+    # namely the squeezed, equilateral and flattened limits.
+
+    if fig is None:
+        fig, axs = plt.subplots(1, 3, figsize=(12, 4))
+    
+    if model_labels is None:
+        model_labels = [model.shape_name for model in model_list]
+
+    limits = ["local", "equil", "ortho"]
+    plot_labels = ["Squeezed", "Equilateral", "Flattened"]
+
+    # Theorist's dimensionless shape function conversion factor
+    k_pivot, A_s, n_s = BASE_K_PIVOT, BASE_A_S, BASE_N_SCALAR
+    delta_phi = 2 * (np.pi ** 2) * ((3 / 5) ** 2) * (k_pivot ** (1 - n_s)) * A_s
+    fact = 3 * k_pivot ** (2 * (1 - n_s)) / (20 * delta_phi ** 2)
+
+    for i, limit in enumerate(limits):
+        ax = axs[i]
+        grid = get_1D_bispectrum_grid(limit, n=n)
+
+        for model, label in zip(model_list, model_labels):
+            evals = model.shape_function(grid["k1"], grid["k2"], grid["k3"])
+            color = next(ax._get_lines.prop_cycler)['color']
+            ax.plot(grid["x_axis"], fact * evals, c=color, label=label)
+            ax.plot(grid["x_axis"], -fact * evals, c=color, ls="--")
+
+        ax.set_yscale("log")
+        ax.set_xlabel(grid["x_label"])
+        ax.set_ylabel(r"$S$" + grid["y_label"])
+        ax.set_title(plot_labels[i])
+        ax.legend()
+
+    fig.tight_layout()
+
+    return fig, axs
+
+
+def plot_1D_shapes(grid_type, model_list, n=200, model_labels=None, constraints=None, fig=None, ax=None):
+    # Plot a 1D 'slice' of the model shape functions specified by 'grid_type'
+    # which connects the squeezed, equilateral and flattened limits
+    # If constraints is not None, additionally provide convergence checks for the modal expansion
+
+    if fig is None:
+        fig, ax = plt.subplots()
+    
+    if model_labels is None:
+        model_labels = [model.shape_name for model in model_list]
+
+    # Theorist's dimensionless shape function conversion factor
+    k_pivot, A_s, n_s = BASE_K_PIVOT, BASE_A_S, BASE_N_SCALAR
+    delta_phi = 2 * (np.pi ** 2) * ((3 / 5) ** 2) * (k_pivot ** (1 - n_s)) * A_s
+    fact = 3 * k_pivot ** (2 * (1 - n_s)) / (20 * delta_phi ** 2)
+
+    grid = get_1D_bispectrum_grid(grid_type, n=n)
+
+    for model, label in zip(model_list, model_labels):
+        evals = model.shape_function(grid["k1"], grid["k2"], grid["k3"])
+        color = next(ax._get_lines.prop_cycler)['color']
+        ax.plot(grid["x_axis"], fact * evals, c=color, label=label)
+        ax.plot(grid["x_axis"], -fact * evals, c=color, ls="--")
+
+    ax.set_yscale("log")
+    ax.set_xlabel(grid["x_label"])
+    ax.set_ylabel(r"$S$" + grid["y_label"])
+    ax.legend()
+
+    return fig, ax
+
+
+def plot_SEF_slice(model_list, n=200, model_labels=None, fig=None, ax=None):
+    # Plot the 'SEF' slice of the model shape functions,
+    # which connects the squeezed, equilateral and flattened limits
+
+    return plot_1D_shapes("SEF", model_list, n=n, model_labels=model_labels, fig=fig, ax=ax)
+
+
+def plot_triangle_slice(model, n=200, K=3*BASE_K_PIVOT, cmap=None, vmin=None, vmax=None, fig=None, ax=None):
+    # Plot a two-demensional triangle slice of the model shape functions,
+    # at some fixed overall scale K=k1+k2+k3
+
+    if fig is None:
+        fig, ax = plt.subplots()
+    
+    # Theorist's dimensionless shape function conversion factor
+    k_pivot, A_s, n_s = BASE_K_PIVOT, BASE_A_S, BASE_N_SCALAR
+    delta_phi = 2 * (np.pi ** 2) * ((3 / 5) ** 2) * (k_pivot ** (1 - n_s)) * A_s
+    fact = 3 * k_pivot ** (2 * (1 - n_s)) / (20 * delta_phi ** 2)
+
+    grid = get_2D_bispectrum_grid("triangle", n=n, K=K)
+
+    evals = model.shape_function(grid["k1"], grid["k2"], grid["k3"])
+
+    tc = ax.tripcolor(grid["x_axis"], grid["y_axis"], fact * evals, cmap=cmap, vmin=vmin, vmax=vmax)
+
+    ax.set_xlabel(grid["x_label"])
+    ax.set_ylabel(grid["y_label"])
+    fig.colorbar(tc)
+
+    return fig, ax
