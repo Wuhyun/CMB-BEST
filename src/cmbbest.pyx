@@ -1105,7 +1105,7 @@ class Constraints:
         # If full_result=True, also save results from simulations 
 
         df = self.to_dataframe(full_result=full_result)
-        df.to_csv(filename, float_format=".18e")
+        df.to_csv(filename, float_format="%18e")
     
 
     def to_file(self, filename):
