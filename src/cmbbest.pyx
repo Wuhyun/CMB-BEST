@@ -1006,6 +1006,74 @@ class Constraints:
         self.marginal_fisher_sigma = kwargs.get("marginal_fisher_sigma")
         self.marginal_sample_sigma = kwargs.get("marginal_sample_sigma")
         self.marginal_LISW_bias = kwargs.get("marginal_LISW_bias")
+    
+
+    def subset_marginal_constraints(self, model_indices):
+        # Computes marginal constraints from a subset of the current model list
+        # Note: the new constraints are shallow copies of the original ones,
+        # so modifying one's values manually may affect the other
+
+        inds = np.array(model_indices)
+        new_model_list = [self.model_list[ind] for ind in inds]
+
+        # Independent constraints are unchanged by taking a subset
+        new_expansion_coefficients = self.expansion_coefficients
+        new_single_f_NL = self.single_f_NL[inds,:]
+        new_single_fisher_sigma = self.single_fisher_sigma[inds]
+        new_single_sample_sigma = self.single_sample_sigma[inds]
+        new_single_LISW_bias = self.single_LISW_bias[inds]
+
+        # Submatrix of the original Fisher matrix
+        new_fisher_matrix = self.fisher_matrix[inds,:][:,inds]
+
+        # New marginal constraints
+        coeff_dot_beta = 6 * new_single_f_NL * np.diag(new_fisher_matrix)[:,np.newaxis]
+        try:
+            new_inverse_fisher_matrix = np.linalg.inv(new_fisher_matrix)
+            new_marginal_f_NL = (1/6) * np.matmul(new_inverse_fisher_matrix, coeff_dot_beta)
+            new_marginal_fisher_sigma = np.sqrt(np.diag(new_inverse_fisher_matrix))
+            new_marginal_sample_sigma = np.std(new_marginal_f_NL[:,1:], axis=1)
+            new_marginal_LISW_bias = np.matmul(new_inverse_fisher_matrix, new_single_LISW_bias)
+                                        
+        except np.linalg.LinAlgError as err:
+            if 'Singular matrix' in str(err):
+                print("Skipping marginal constraints due to colinearity in the models considered.")
+                new_inverse_fisher_matrix = None
+                new_marginal_f_NL = None
+                new_marginal_fisher_sigma = None
+                new_marginal_sample_sigma = None
+                new_marginal_LISW_bias = None
+            else:
+                raise
+        
+        # Miscellaneous
+        if self.convergence_correlation is not None:
+            new_convergence_correlation = self.convergence_correlation[inds]
+        else:
+            new_convergence_correlation = None
+        if self.convergence_MSE is not None:
+            new_convergence_MSE = self.convergence_MSE[inds]
+        else:
+            new_convergence_MSE = None
+
+        # Save the results
+        new_constraints = Constraints(basis=self.basis,
+                                  model_list=new_model_list,
+                                  expansion_coefficients=new_expansion_coefficients,
+                                  convergence_correlation=new_convergence_correlation,
+                                  convergence_MSE=new_convergence_MSE,
+                                  fisher_matrix=new_fisher_matrix,
+                                  single_f_NL=new_single_f_NL,
+                                  single_fisher_sigma=new_single_fisher_sigma,
+                                  single_sample_sigma=new_single_sample_sigma,
+                                  single_LISW_bias=new_single_LISW_bias,
+                                  marginal_f_NL=new_marginal_f_NL,
+                                  marginal_fisher_sigma=new_marginal_fisher_sigma,
+                                  marginal_sample_sigma=new_marginal_sample_sigma,
+                                  marginal_LISW_bias=new_marginal_LISW_bias,
+                                 )
+
+        return new_constraints
 
 
     def delta_log_likelihood(self, fNLs=None):
@@ -1215,7 +1283,7 @@ class Constraints:
         return g
     
 
-    def shape_plot(self, grid_type, n=200, model_labels=None, fig=None, ax=None):
+    def shape_plot(self, grid_type, n=200, model_labels=None, convergence_check=True, fig=None, ax=None):
         # Plot a 1D 'slice' of the model shape functions specified by 'grid_type'
         # If constraints is not None, additionally provide convergence checks for the modal expansion
 
@@ -1232,14 +1300,16 @@ class Constraints:
 
         grid = get_1D_bispectrum_grid(grid_type, n=n)
 
-        rec_evals = self.basis.evaluate_modal_bispectra_on_grid(self.expansion_coefficients, grid["k1"], grid["k2"], grid["k3"])
+        if convergence_check:
+            rec_evals = self.basis.evaluate_modal_bispectra_on_grid(self.expansion_coefficients, grid["k1"], grid["k2"], grid["k3"])
 
         for model, label, rec_eval in zip(self.model_list, model_labels, rec_evals):
             evals = model.shape_function(grid["k1"], grid["k2"], grid["k3"])
             color = next(ax._get_lines.prop_cycler)['color']
             ax.plot(grid["x_axis"], fact * evals, c=color, label=label)
             ax.plot(grid["x_axis"], -fact * evals, c=color, ls="--")
-            ax.plot(grid["x_axis"], fact * np.abs(rec_eval), "x", c=color)
+            if convergence_check:
+                ax.plot(grid["x_axis"], fact * np.abs(rec_eval), "x", c=color)
 
         ax.set_yscale("log")
         ax.set_xlabel(grid["x_label"])
