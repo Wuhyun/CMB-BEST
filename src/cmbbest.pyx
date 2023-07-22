@@ -1017,7 +1017,7 @@ class Constraints:
         new_model_list = [self.model_list[ind] for ind in inds]
 
         # Independent constraints are unchanged by taking a subset
-        new_expansion_coefficients = self.expansion_coefficients
+        new_expansion_coefficients = self.expansion_coefficients[inds,:]
         new_single_f_NL = self.single_f_NL[inds,:]
         new_single_fisher_sigma = self.single_fisher_sigma[inds]
         new_single_sample_sigma = self.single_sample_sigma[inds]
@@ -1283,7 +1283,7 @@ class Constraints:
         return g
     
 
-    def shape_plot(self, grid_type, n=200, model_labels=None, convergence_check=True, fig=None, ax=None):
+    def shape_plot(self, grid_type, n=200, model_labels=None, log_scale=True, convergence_check=True, fig=None, ax=None):
         # Plot a 1D 'slice' of the model shape functions specified by 'grid_type'
         # If constraints is not None, additionally provide convergence checks for the modal expansion
 
@@ -1303,15 +1303,19 @@ class Constraints:
         if convergence_check:
             rec_evals = self.basis.evaluate_modal_bispectra_on_grid(self.expansion_coefficients, grid["k1"], grid["k2"], grid["k3"])
 
-        for model, label, rec_eval in zip(self.model_list, model_labels, rec_evals):
+        for i, model in enumerate(self.model_list):
             evals = model.shape_function(grid["k1"], grid["k2"], grid["k3"])
             color = next(ax._get_lines.prop_cycler)['color']
-            ax.plot(grid["x_axis"], fact * evals, c=color, label=label)
-            ax.plot(grid["x_axis"], -fact * evals, c=color, ls="--")
+            ax.plot(grid["x_axis"], fact * evals, c=color, label=model_labels[i])
+            if log_scale:
+                ax.plot(grid["x_axis"], -fact * evals, c=color, ls="--")
             if convergence_check:
-                ax.plot(grid["x_axis"], fact * np.abs(rec_eval), "x", c=color)
+                ax.plot(grid["x_axis"], fact * rec_evals[i,:], "x", c=color)
+                if log_scale:
+                    ax.plot(grid["x_axis"], -fact * rec_evals[i,:], "x", c=color)
 
-        ax.set_yscale("log")
+        if log_scale:
+            ax.set_yscale("log")
         ax.set_xlabel(grid["x_label"])
         ax.set_ylabel(r"$S$" + grid["y_label"])
         ax.legend()
