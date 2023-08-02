@@ -1008,7 +1008,7 @@ class Constraints:
         self.marginal_LISW_bias = kwargs.get("marginal_LISW_bias")
     
 
-    def subset_marginal_constraints(self, model_indices):
+    def subset_constraints(self, model_indices):
         # Computes marginal constraints from a subset of the current model list
         # Note: the new constraints are shallow copies of the original ones,
         # so modifying one's values manually may affect the other
@@ -1245,6 +1245,35 @@ class Constraints:
         # Load the full constraints from a hdf5 file,
         # saved using the to_file() function
         pass
+    
+
+    def shape_correlation_plot(self, model_labels=None, colorbar=False, fig=None, ax=None):
+        # Plot for visualising the shape correlation matrix
+
+        if fig is None:
+            fig, ax = plt.subplots()
+        
+        if model_labels is None:
+            model_labels = [model.shape_name for model in self.model_list]
+
+        corr = self.shape_correlation_matrix()
+        corr = np.tril(corr)    # Take only lower triangle
+
+        img = ax.imshow(corr, vmin=-1, vmax=1, cmap="RdBu")
+
+        for i in range(corr.shape[0]):
+            for j in range(i, corr.shape[1]):
+                ax.text(i, j, f"{corr[j,i]:.2f}", fontsize=6, horizontalalignment="center", verticalalignment="center")
+
+        ax.set_xticks(np.arange(corr.shape[0]))
+        ax.set_xticklabels(model_labels, rotation=45)
+        ax.set_yticks(np.arange(corr.shape[0]))
+        ax.set_yticklabels(model_labels)
+        ax.set_frame_on(False)
+        if colorbar:
+            fig.colorbar(img)
+
+        return fig, ax
 
 
     def triangle_plot(constraints_list, constraints_labels=None, shape_names=None, shape_labels=None, fig_width_inch=6., plot_kwargs={}):
