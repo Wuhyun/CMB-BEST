@@ -29,7 +29,7 @@ $ make
 ```
 To install the library, run
 ```
-$ make lib
+$ make install
 ```
 This installs the library 'cmbbest' in development mode. To update the library, running
  ```

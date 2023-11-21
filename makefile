@@ -7,7 +7,7 @@ PYTHON := python3
 cmbbest:
 	${PYTHON} setup.py build_ext --inplace
 
-lib:
+install:
 	${PYTHON} -m pip install -e .
 
 clean:
