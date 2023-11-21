@@ -1076,6 +1076,106 @@ class Constraints:
         return new_constraints
 
 
+    def fixed_f_NL_constraints(self, model_indices, fixed_f_NLs):
+        # Computes new constraints for when the f_NL values of a subset of the current model list are fixed
+        # Note: the new constraints are shallow copies of the original ones,
+        # so modifying one's values manually may affect the other
+
+        if not hasattr(model_indices, "__len__"):
+            # If it is not an array, turn it into a numpy array
+            model_indices = np.array([model_indices])
+
+        if not hasattr(fixed_f_NLs, "__len__"):
+            fixed_f_NLs = np.array([fixed_f_NLs])
+
+        fixed_indices = np.array(model_indices)
+        fixed_f_NLs = np.array(fixed_f_NLs)
+        remaining_indices = np.array([i for i in range(self.n_models) if i not in fixed_indices])
+        if len(remaining_indices) == 0:
+            print("Cannot fix all fNLs, leave at least one fNL free")
+            return
+
+        new_model_list = [self.model_list[i] for i in remaining_indices]
+
+        # Basis specific data
+        beta = self.basis.beta                # (N_sims, n_modes)
+        beta_LISW = self.basis.beta_LISW      # (n_modes)
+        gamma = self.basis.gamma              # (n_modes, n_modes)
+        f_sky = self.basis.parameter_f_sky
+
+        # Now compute the 'bias' from the constant term
+        fixed_coeff = self.expansion_coefficients[fixed_indices,:]
+        fixed_beta = np.matmul(np.sum(fixed_f_NLs[:,np.newaxis] * fixed_coeff, axis=0), gamma)
+        corrected_beta = beta - f_sky * (beta_LISW + fixed_beta)[np.newaxis,:]
+
+        # Get new constraints
+        coeff = self.expansion_coefficients[remaining_indices,:]
+        fisher_matrix = self.fisher_matrix[remaining_indices,:][:,remaining_indices]
+        coeff_dot_beta = np.matmul(coeff, corrected_beta.T)   # (N_models, N_sims)
+
+        # Treat each model independently
+        single_f_NL = (1/6) * coeff_dot_beta / np.diag(fisher_matrix)[:,np.newaxis] # (N_models, N_sims)
+        single_fisher_sigma = np.sqrt(1 / np.diag(fisher_matrix))                   # (N_models)
+        single_sample_sigma = np.std(single_f_NL[:,1:], axis=1)                     # (N_models)
+        single_LISW_bias = ((1/6) * np.matmul(coeff, f_sky * beta_LISW)
+                                / np.diag(fisher_matrix))                           # (N_models)
+        single_bias = ((1/6) * np.matmul(coeff, f_sky * fixed_beta)
+                                / np.diag(fisher_matrix))                           # (N_models)
+
+        # Marginalise over other models
+        try:
+            inverse_fisher_matrix = np.linalg.inv(fisher_matrix)
+            marginal_f_NL = (1/6) * np.matmul(inverse_fisher_matrix, coeff_dot_beta)    # (N_models, N_sims)
+            marginal_fisher_sigma = np.sqrt(np.diag(inverse_fisher_matrix))             # (N_models)
+            marginal_sample_sigma = np.std(marginal_f_NL[:,1:], axis=1)                 # (N_models)
+            marginal_LISW_bias = ((1/6) * np.matmul(inverse_fisher_matrix,
+                                                np.matmul(coeff, f_sky * beta_LISW)))   # (N_models)
+            marginal_bias = ((1/6) * np.matmul(inverse_fisher_matrix,
+                                                np.matmul(coeff, f_sky * fixed_beta)))   # (N_models)
+
+        except np.linalg.LinAlgError as err:
+            if 'Singular matrix' in str(err):
+                print("Skipping marginal constraints due to colinearity in the models considered.")
+                inverse_fisher_matrix = None
+                marginal_f_NL = None
+                marginal_fisher_sigma = None
+                marginal_sample_sigma = None
+                marginal_LISW_bias = None
+            else:
+                raise
+
+        # Miscellaneous
+        if self.convergence_correlation is not None:
+            convergence_correlation = self.convergence_correlation[remaining_indices]
+        else:
+            convergence_correlation = None
+        if self.convergence_MSE is not None:
+            convergence_MSE = self.convergence_MSE[remaining_indices]
+        else:
+            convergence_MSE = None
+
+        # Save the results
+        new_constraints = Constraints(basis=self.basis,
+                                    model_list=new_model_list,
+                                    expansion_coefficients=coeff,
+                                    convergence_correlation=convergence_correlation,
+                                    convergence_MSE=convergence_MSE,
+                                    fisher_matrix=fisher_matrix,
+                                    single_f_NL=single_f_NL,
+                                    single_fisher_sigma=single_fisher_sigma,
+                                    single_sample_sigma=single_sample_sigma,
+                                    single_LISW_bias=single_LISW_bias,
+                                    marginal_f_NL=marginal_f_NL,
+                                    marginal_fisher_sigma=marginal_fisher_sigma,
+                                    marginal_sample_sigma=marginal_sample_sigma,
+                                    marginal_LISW_bias=marginal_LISW_bias,
+                                    )
+        new_constraints.single_bias = single_bias
+        new_constraints.marginal_bias = marginal_bias
+
+        return new_constraints
+
+
     def delta_log_likelihood(self, fNLs=None):
         # Comptues the log-likelihood gain from assuming a model, compared to zero bispectrum.
         # Assumes indendent shape analyses.
