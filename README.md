@@ -41,7 +41,7 @@ anytime will do the trick.
 
 ## Data
 
-A precomputed data file is required to use the package. Please download the HDF5 file from this [Google Drive link](https://drive.google.com/file/d/10BGPCXAtkWF23eZi4R_P-PYVd4NBtGnq/view?usp=share_link) and keep the file inside the "data" directory.
+A precomputed data file is required to use the package. Please download the data file from the 'Releases' in this GitHub Repository: download the 'cmbbest_data.hdf5' file and save it inside the "data" directory.
 
 
 ## Quick Start
