@@ -1,0 +1,11 @@
+title: CMB-BEST
+abstract: "CMB bispectrum estimator for constraining primordial non-Gaussianity"
+authors:
+  - family-names: Sohn
+    given-names: Wuhyun
+    orcid: "https://orcid.org/0000-0002-6039-8247"
+message: If you use this software, please cite it using these metadata.
+cff-version: 1.2.0
+license: Apache-2.0
+repository-code: "https://github.com/Wuhyun/CMB-BEST"
+version: 1.0.0
