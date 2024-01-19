@@ -1,5 +1,5 @@
 import numpy as np
-import os
+import os, sys
 cimport numpy as np
 cimport cython
 from cython.parallel import parallel, prange
@@ -86,7 +86,6 @@ def tensor_prod_coeffs(coeffs_1, coeffs_2, pmax_1, pmax_2):
     tot_coeffs[:,:] = coeffs_1[:,abc_inds] * coeffs_2[:,def_inds]
 
     return tot_coeffs
-
 
 
 class Basis:
@@ -969,7 +968,69 @@ class Basis:
         loglike = 0.5 * (np.matmul(coeffs, pre["B"]) ** 2) / np.sum((np.matmul(coeffs, pre["A"]) * coeffs), axis=1)[:,np.newaxis]
 
         return loglike
+    
 
+    def constrain_and_save(self, save_dir, shape_function, extra_args_list, shape_name="custom", split_size=1000):
+        ''' Constrain multiple models specified by the shape function and extra arguments,
+            then save the results into the directory specified.
+            Results include the expansion coefficients, dataframe with constraints, and the fisher matrix.
+            Large lists are split into chunks of split_size for memory efficiencies.
+            Number of arguments are assumed to be identical across the list.
+        '''
+
+        #TODO: add path checks to prevent overwriting
+        if not os.path.exists(save_dir):
+            try:
+                os.makedirs(save_dir)
+            except OSError as e:
+                print(f"Error creating directory path '{save_dir}': {e}")
+                sys.exit(1)
+        
+        # Function closure for new shape functions
+        def get_shape_func(func, extra_args):
+            def new_func(k1 ,k2, k3):
+                return func(k1, k2, k3, *extra_args)
+            return new_func
+
+        n_models = len(extra_args_list)
+        n_pars = len(extra_args_list[0])
+        models = [Model("custom",
+                        shape_function=get_shape_func(shape_function, extra_args),
+                        shape_name=(shape_name+f"_{n}")
+                       ) for n, extra_args in enumerate(extra_args_list)]
+
+        # The ith split given by splits[i] (inclusive) - splits[i+1] (exclusive)
+        splits = np.append(np.arange(0, n_models, split_size), n_models)
+        n_splits = len(splits) - 1
+
+        for i_split in range(n_splits):
+            print(f"Working on split #{i_split+1} / {n_splits}")
+        
+            models_slice = [models[i] for i in range(splits[i_split], splits[i_split+1])]
+            pars_slice = [extra_args_list[i] for i in range(splits[i_split], splits[i_split+1])]
+
+            # Save parameters used
+            pars_df = pd.DataFrame(pars_slice, columns=[f"param_p{i+1}" for i in range(n_pars)])
+            pars_df.to_csv(save_dir + f"/parameters_{i_split}.csv", float_format="%18e", index=False)
+
+            # Constrain models
+            constraints_slice = self.constrain_models(models_slice, use_pseudoinverse=True)
+
+            # Save results to binary files
+            np.save(save_dir + f"/alphas_{i_split}.npy", constraints_slice.expansion_coefficients)
+            np.save(save_dir + f"/fisher_{i_split}.npy", constraints_slice.fisher_matrix)
+
+            # Create a dataframe with full constraints and parameters
+            df = constraints_slice.to_dataframe(full_result=True)
+            n_maps = len(df) // len(models_slice)
+            rep_pars_df = pars_df.loc[pars_df.index.repeat(n_maps)].reset_index()
+            df = pd.concat([df, rep_pars_df], axis=1)
+
+            # Save dataframes to file
+            df.to_csv(save_dir + f"/constraints_full_{i_split}.csv", float_format="%18e", index=False)
+            df[df["map_number"] == 0].to_csv(save_dir + f"/constraints_{i_split}.csv", float_format="%18e", index=False)
+        
+        return
 
 
 class Constraints:

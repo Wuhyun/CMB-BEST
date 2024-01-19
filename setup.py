@@ -19,4 +19,12 @@ module = cythonize(ext,
                    build_dir="build",
                    )
 
-setup(name="cmbbest", ext_modules=module)
+setup(
+    name="cmbbest",
+    version="1.0",
+    description="CMB bispectrum estimator for constraining primordial non-Gaussianity",
+    author="Wuhyun Sohn",
+    url="https://github.com/Wuhyun/CMB-BEST",
+    author_email="wuhyun@kasi.re.kr",
+    ext_modules=module
+)
