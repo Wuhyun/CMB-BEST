@@ -970,7 +970,7 @@ class Basis:
         return loglike
     
 
-    def constrain_and_save(self, save_dir, shape_function, extra_args_list, shape_name="custom", split_size=1000):
+    def constrain_and_save(self, save_dir, shape_function, extra_args_list, shape_name="custom", split_size=1000, use_pseudoinverse=True):
         ''' Constrain multiple models specified by the shape function and extra arguments,
             then save the results into the directory specified.
             Results include the expansion coefficients, dataframe with constraints, and the fisher matrix.
@@ -1014,7 +1014,7 @@ class Basis:
             pars_df.to_csv(save_dir + f"/parameters_{i_split}.csv", float_format="%18e", index=False)
 
             # Constrain models
-            constraints_slice = self.constrain_models(models_slice, use_pseudoinverse=True)
+            constraints_slice = self.constrain_models(models_slice, use_pseudoinverse=use_pseudoinverse)
 
             # Save results to binary files
             np.save(save_dir + f"/alphas_{i_split}.npy", constraints_slice.expansion_coefficients)
