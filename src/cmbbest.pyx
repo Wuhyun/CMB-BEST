@@ -970,7 +970,7 @@ class Basis:
         return loglike
     
 
-    def constrain_and_save(self, save_dir, shape_function, extra_args_list, shape_name="custom", split_size=1000, use_pseudoinverse=True):
+    def constrain_and_save(self, save_dir, shape_function, extra_args_list, shape_name="custom", split_size=1000, use_pseudoinverse=True, starting_number=0):
         ''' Constrain multiple models specified by the shape function and extra arguments,
             then save the results into the directory specified.
             Results include the expansion coefficients, dataframe with constraints, and the fisher matrix.
@@ -1002,23 +1002,24 @@ class Basis:
         # The ith split given by splits[i] (inclusive) - splits[i+1] (exclusive)
         splits = np.append(np.arange(0, n_models, split_size), n_models)
         n_splits = len(splits) - 1
+        sn = starting_number
 
         for i_split in range(n_splits):
-            print(f"Working on split #{i_split+1} / {n_splits}")
+            print(f"Working on split #{i_split+1} / {n_splits}. Suffix: _{sn+i_split}")
         
             models_slice = [models[i] for i in range(splits[i_split], splits[i_split+1])]
             pars_slice = [extra_args_list[i] for i in range(splits[i_split], splits[i_split+1])]
 
             # Save parameters used
             pars_df = pd.DataFrame(pars_slice, columns=[f"param_p{i+1}" for i in range(n_pars)])
-            pars_df.to_csv(save_dir + f"/parameters_{i_split}.csv", float_format="%18e", index=False)
+            pars_df.to_csv(save_dir + f"/parameters_{sn+i_split}.csv", float_format="%18e", index=False)
 
             # Constrain models
             constraints_slice = self.constrain_models(models_slice, use_pseudoinverse=use_pseudoinverse)
 
             # Save results to binary files
-            np.save(save_dir + f"/alphas_{i_split}.npy", constraints_slice.expansion_coefficients)
-            np.save(save_dir + f"/fisher_{i_split}.npy", constraints_slice.fisher_matrix)
+            np.save(save_dir + f"/alphas_{sn+i_split}.npy", constraints_slice.expansion_coefficients)
+            np.save(save_dir + f"/fisher_{sn+i_split}.npy", constraints_slice.fisher_matrix)
 
             # Create a dataframe with full constraints and parameters
             df = constraints_slice.to_dataframe(full_result=True)
@@ -1027,8 +1028,8 @@ class Basis:
             df = pd.concat([df, rep_pars_df], axis=1)
 
             # Save dataframes to file
-            df.to_csv(save_dir + f"/constraints_full_{i_split}.csv", float_format="%18e", index=False)
-            df[df["map_number"] == 0].to_csv(save_dir + f"/constraints_{i_split}.csv", float_format="%18e", index=False)
+            df.to_csv(save_dir + f"/constraints_full_{sn+i_split}.csv", float_format="%18e", index=False)
+            df[df["map_number"] == 0].to_csv(save_dir + f"/constraints_{sn+i_split}.csv", float_format="%18e", index=False)
         
         return
 
