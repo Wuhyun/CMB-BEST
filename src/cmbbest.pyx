@@ -1496,14 +1496,13 @@ class Constraints:
 
         for i, model in enumerate(self.model_list):
             evals = model.shape_function(grid["k1"], grid["k2"], grid["k3"])
-            color = next(ax._get_lines.prop_cycler)['color']
-            ax.plot(grid["x_axis"], fact * evals, c=color, label=model_labels[i])
+            l, = ax.plot(grid["x_axis"], fact * evals, label=model_labels[i])
             if log_scale:
-                ax.plot(grid["x_axis"], -fact * evals, c=color, ls="--")
+                ax.plot(grid["x_axis"], -fact * evals, c=l.get_color(), ls="--")
             if convergence_check:
-                ax.plot(grid["x_axis"], fact * rec_evals[i,:], "x", c=color)
+                ax.plot(grid["x_axis"], fact * rec_evals[i,:], "x", c=l.get_color())
                 if log_scale:
-                    ax.plot(grid["x_axis"], -fact * rec_evals[i,:], "x", c=color)
+                    ax.plot(grid["x_axis"], -fact * rec_evals[i,:], "x", c=l.get_color())
 
         if log_scale:
             ax.set_yscale("log")
@@ -1815,9 +1814,8 @@ def plot_three_limits(model_list, n=200, model_labels=None, fig=None, axs=None):
 
         for model, label in zip(model_list, model_labels):
             evals = model.shape_function(grid["k1"], grid["k2"], grid["k3"])
-            color = next(ax._get_lines.prop_cycler)['color']
-            ax.plot(grid["x_axis"], fact * evals, c=color, label=label)
-            ax.plot(grid["x_axis"], -fact * evals, c=color, ls="--")
+            l, = ax.plot(grid["x_axis"], fact * evals label=label)
+            ax.plot(grid["x_axis"], -fact * evals, c=l.get_color(), ls="--")
 
         ax.set_yscale("log")
         ax.set_xlabel(grid["x_label"])
@@ -1850,9 +1848,8 @@ def plot_1D_shapes(grid_type, model_list, n=200, model_labels=None, constraints=
 
     for model, label in zip(model_list, model_labels):
         evals = model.shape_function(grid["k1"], grid["k2"], grid["k3"])
-        color = next(ax._get_lines.prop_cycler)['color']
-        ax.plot(grid["x_axis"], fact * evals, c=color, label=label)
-        ax.plot(grid["x_axis"], -fact * evals, c=color, ls="--")
+        l, = ax.plot(grid["x_axis"], fact * evals, label=label)
+        ax.plot(grid["x_axis"], -fact * evals, c=l.get_color(), ls="--")
 
     ax.set_yscale("log")
     ax.set_xlabel(grid["x_label"])
