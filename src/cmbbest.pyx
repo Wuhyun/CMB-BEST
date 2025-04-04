@@ -599,7 +599,7 @@ class Basis:
         alpha = np.zeros((N_models, N_modes))
         for model_no in range(N_models):
             QS_tilde = QS[model_no,:] / norms   # Normalise mode
-            alpha_tilde, exit_code = conjugate_gradient(QQ_tilde, QS_tilde, tol=1e-8, atol=0, maxiter=min([10*N_modes, 10000]))
+            alpha_tilde, exit_code = conjugate_gradient(QQ_tilde, QS_tilde, rtol=1e-8, atol=0, maxiter=min([10*N_modes, 10000]))
             #print("Shape #{}/{} expanded using CG with exit code {}".format(model_no+1, N_models, exit_code))
             if not silent:
                 print("Shape #{}/{} expanded".format(model_no+1, N_models))
