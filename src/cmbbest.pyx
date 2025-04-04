@@ -1814,7 +1814,7 @@ def plot_three_limits(model_list, n=200, model_labels=None, fig=None, axs=None):
 
         for model, label in zip(model_list, model_labels):
             evals = model.shape_function(grid["k1"], grid["k2"], grid["k3"])
-            l, = ax.plot(grid["x_axis"], fact * evals label=label)
+            l, = ax.plot(grid["x_axis"], fact * evals, label=label)
             ax.plot(grid["x_axis"], -fact * evals, c=l.get_color(), ls="--")
 
         ax.set_yscale("log")
